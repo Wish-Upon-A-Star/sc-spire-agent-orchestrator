@@ -141,6 +141,15 @@ route `chatgpt_pro_manual_strategist`(auto_spawn:false, manual surface) + person
 - ✅ 자가 코드검토(Codex infra 다운 — `service_tier:flex` 계정 거부): `safe_run_dir`로 path-traversal 차단, id/answer 검증, parse 실패→wrap(raise 없음), 패킷 입력=capsule만이라 시크릿 누출 없음. sound.
 - 🔧 인프라: `~/.codex/config.toml` `service_tier="flex"` → 계정이 API 400 거부 → **제거(계정 기본 tier)**. 다음 Codex 검증축 복구 시도.
 
+## A4 (workflow_states 단일화) + L5 (waiting_for_operator) · ✅ 완료·검증
+
+**A4:** `prompt_contracts/workflow_states.json`(31 상태, bucket/label_ko/is_terminal/allowed_next/requires_artifacts) 단일 스키마. 서버가 startup에 로드 → ACTIVE/PREPARED/BLOCKED/TERMINAL 셋을 derive(이름 유지, 각 `or {hardcoded}` fallback). `/api/status`에 workflow_states 노출. frontend statusLabel이 그걸 우선 참조+hardcoded fallback. **4개 셋 byte-identical 동등성 확인.**
+**L5:** `waiting_for_operator` 상태 + `gpt-pro-waiting.json` 플래그. 패킷 생성→waiting, 답변 저장→해제. work item에 waiting_for_operator 필드.
+
+**검증 (3중):**
+- ✅ 나 직접: pytest **18 passed**(+states_cover_backend_sets, gpt_pro_waiting_then_clears) / smoke `{"ok":true}` / GET 새파일 0(A1 회귀X) / workflow_states 31개·waiting 노출 / 상태셋 4개 동등
+- ✅ Codex(복구됨!): problems 2건 지적 → #1 **build_gpt_pro_request가 기존 result를 무조건 삭제(데이터 손실)** → **삭제→타임스탬프 아카이브로 수정**(`gpt-pro-review-result.archived-<ts>.json`). #2 스키마 malformed→빈셋 우회 → **이미 4개 셋 모두 `or {hardcoded}` fallback 있어 방어됨**(Codex가 terminal fallback 못 봄), residual(non-empty 오분류)은 version-controlled+test로 수용.
+
 ## 남은 일 (커밋 보류 상태)
 - git 커밋 전부 보류 중 (working tree에 무관 게임 WIP 995개). 사용자가 원하면 `tools/sc_spire_agent_sdk_orchestrator/` + `docs/superpowers/plans/` 만 scoped commit 가능.
 - 변경 파일: viewer_server.py, viewer_static/{app.js,index.html,styles.css}, test_viewer_units.py, smoke_test_viewer.py (+ ~/.codex/config.toml 1줄).

@@ -602,6 +602,10 @@ function renderPreflightBanner(state) {
 }
 
 function statusLabel(status) {
+  // A4: prefer the single workflow-state schema (label_ko) so backend/frontend
+  // stay in sync; fall back to the hardcoded mapping below if absent.
+  const fromSchema = state.queueStatus?.workflow_states?.[status]?.label_ko;
+  if (fromSchema) return fromSchema;
   if (status === "queued") return t.statusQueued;
   if (status === "preflight_refining") return t.statusPreflightRefining;
   if (status === "planning") return t.statusPlanning;

@@ -650,6 +650,9 @@ def summarize_run_context(run_id: str) -> dict[str, object]:
 GPT_PRO_REQUEST_ARTIFACT = "gpt-pro-review-request.md"
 GPT_PRO_RESULT_ARTIFACT = "gpt-pro-review-result.json"
 GPT_PRO_DEFAULT_MODEL = "gpt-5.5-pro"
+# L5: human-gated waiting flag. Written when the GPT Pro request packet is built
+# (the run is now waiting on the operator) and removed when the result arrives.
+GPT_PRO_WAITING_ARTIFACT = "gpt-pro-waiting.json"
 
 
 def build_gpt_pro_request_markdown(run_id: str, capsule: dict[str, object]) -> str:
@@ -799,12 +802,28 @@ def build_gpt_pro_request(payload: dict[str, object]) -> dict[str, object]:
         capsule = build_context_capsule(run_id, run_dir, mode=_run_capsule_mode(run_dir))
     markdown = build_gpt_pro_request_markdown(run_id, capsule)
     (run_dir / GPT_PRO_REQUEST_ARTIFACT).write_text(markdown, encoding="utf-8")
+    # L5: the manual GPT Pro lane is human-gated — once the packet exists the run
+    # is waiting on the operator. A stale result from a prior round must not keep
+    # the run looking "answered", so clear it before flagging waiting.
+    result_path = run_dir / GPT_PRO_RESULT_ARTIFACT
+    if result_path.exists():
+        # A re-request must not silently destroy a prior operator answer; archive it
+        # (timestamped) so the run leaves "answered" but the data is preserved.
+        stamp = "".join(ch for ch in utc_timestamp() if ch.isalnum())
+        try:
+            result_path.replace(run_dir / f"gpt-pro-review-result.archived-{stamp}.json")
+        except OSError:
+            pass
+    write_json(
+        run_dir / GPT_PRO_WAITING_ARTIFACT,
+        {"status": "waiting_for_operator", "since": utc_timestamp()},
+    )
     append_transcript_event(
         run_dir,
         "gpt-pro-strategy-advisor",
         "operator",
         "gpt_pro_request_built",
-        "GPT Pro 수동 전략 검토 요청 패킷 생성",
+        "GPT Pro 수동 전략 검토 요청 패킷 생성 — 운영자 응답 대기",
         GPT_PRO_REQUEST_ARTIFACT,
     )
     invalidate_status_cache()
@@ -812,6 +831,7 @@ def build_gpt_pro_request(payload: dict[str, object]) -> dict[str, object]:
         "run": run_payload(run_id),
         "artifact": GPT_PRO_REQUEST_ARTIFACT,
         "request_preview": markdown[:600],
+        "waiting_for_operator": True,
     }
 
 
@@ -826,6 +846,14 @@ def record_gpt_pro_result(payload: dict[str, object]) -> dict[str, object]:
     model_claimed = str(payload.get("model_claimed", "")).strip() or GPT_PRO_DEFAULT_MODEL
     record = build_gpt_pro_result_record(run_id, answer, model_claimed)
     write_json(run_dir / GPT_PRO_RESULT_ARTIFACT, record)
+    # L5: the operator has answered — clear the waiting flag so the run leaves
+    # waiting_for_operator.
+    waiting_path = run_dir / GPT_PRO_WAITING_ARTIFACT
+    if waiting_path.exists():
+        try:
+            waiting_path.unlink()
+        except OSError:
+            pass
     append_transcript_event(
         run_dir,
         "gpt-pro-strategy-advisor",
@@ -840,6 +868,7 @@ def record_gpt_pro_result(payload: dict[str, object]) -> dict[str, object]:
         "artifact": GPT_PRO_RESULT_ARTIFACT,
         "schema_valid": record.get("schema_valid"),
         "verdict": record.get("verdict"),
+        "waiting_for_operator": False,
     }
 
 
@@ -5920,7 +5949,38 @@ def queue_processor_loop() -> None:
         time.sleep(max(1.0, QUEUE_POLL_SECONDS))
 
 
-ACTIVE_STATUSES = {
+# A4: single workflow-state schema. The four status sets below are DERIVED from
+# prompt_contracts/workflow_states.json so backend buckets, frontend labels
+# (statusLabel) and smoke checks share one definition. The set NAMES are kept so
+# all existing references keep working. Behavior is equivalence-preserving: the
+# derived sets contain exactly the statuses that were previously hardcoded.
+WORKFLOW_STATES_PATH = Path(__file__).resolve().parent / "prompt_contracts" / "workflow_states.json"
+
+
+def _load_workflow_states() -> dict[str, dict[str, object]]:
+    """Load WORKFLOW_STATES once at startup. Falls back to {} on any error so the
+    server still boots; the fallback sets below then cover known statuses."""
+    try:
+        loaded = json.loads(WORKFLOW_STATES_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    states = loaded.get("states") if isinstance(loaded, dict) else None
+    if not isinstance(states, dict):
+        return {}
+    return {str(name): value for name, value in states.items() if isinstance(value, dict)}
+
+
+WORKFLOW_STATES: dict[str, dict[str, object]] = _load_workflow_states()
+
+
+def _statuses_in_bucket(bucket: str) -> set[str]:
+    return {name for name, value in WORKFLOW_STATES.items() if value.get("bucket") == bucket}
+
+
+# Derive the four sets from WORKFLOW_STATES (terminal from is_terminal). If the
+# schema file is missing/unreadable, fall back to the original hardcoded contents
+# so the server keeps the exact same behavior.
+ACTIVE_STATUSES = _statuses_in_bucket("active") or {
     "queued",
     "preflight_refining",
     "planning",
@@ -5936,13 +5996,18 @@ ACTIVE_STATUSES = {
     "worker_result_recorded",
     "closure_ready",
 }
-PREPARED_STATUSES = {
+PREPARED_STATUSES = _statuses_in_bucket("prepared") or {
     "sent_to_main",
     "prepared_not_running",
     "planning_ready",
 }
-BLOCKED_STATUSES = {"dispatch_blocked", "blocked"}
-TERMINAL_STATUSES = {"done", "failed", "canceled", "removed"}
+BLOCKED_STATUSES = _statuses_in_bucket("blocked") or {"dispatch_blocked", "blocked"}
+TERMINAL_STATUSES = {
+    name for name, value in WORKFLOW_STATES.items() if value.get("is_terminal")
+} or {"done", "failed", "canceled", "removed"}
+# Human-gated states (L5). Not part of the original four sets; surfaced via the
+# waiting bucket so derivation stays equivalence-preserving.
+WAITING_STATUSES = _statuses_in_bucket("waiting")
 
 
 def run_work_state(run_id: str) -> dict[str, str]:
@@ -5960,6 +6025,24 @@ def run_work_state(run_id: str) -> dict[str, str]:
             "gate_status": "completed_with_closure_packet",
             "updated_at": run_id[:15],
             "detail": "closure-packet.json이 생성됐습니다. 보고서 작성/오케스트레이터 검증 범위 완료입니다.",
+        }
+    # L5: human-gated GPT Pro lane. If the waiting flag exists and no result has
+    # been recorded yet, the run is paused on the operator.
+    waiting_path = run_dir / GPT_PRO_WAITING_ARTIFACT
+    if waiting_path.exists() and not (run_dir / GPT_PRO_RESULT_ARTIFACT).exists():
+        since = ""
+        try:
+            flag = read_json_file(waiting_path)
+            if isinstance(flag, dict):
+                since = str(flag.get("since", "")).strip()
+        except Exception:
+            since = ""
+        return {
+            "status": "waiting_for_operator",
+            "gate_status": "waiting_for_operator",
+            "updated_at": since or run_id[:15],
+            "detail": "GPT Pro 검토 요청 패킷을 만들었습니다. 운영자가 ChatGPT Pro 답변을 붙여넣을 때까지 대기합니다.",
+            "waiting_for_operator": True,
         }
     gate_path = run_dir / "review-gate.json"
     gate: dict[str, object] = {}
@@ -6013,6 +6096,10 @@ def work_item_bucket(status: str) -> str:
         return "prepared"
     if status in BLOCKED_STATUSES:
         return "blocked"
+    if status in WAITING_STATUSES:
+        # L5: human-gated states (waiting_for_operator) sit in the active column
+        # so they stay visible on the work-board / command-strip while paused.
+        return "active"
     if status == "legacy_record":
         return "archive"
     if status in TERMINAL_STATUSES:
@@ -6045,6 +6132,7 @@ def build_work_items(limit: int = 120) -> list[dict[str, object]]:
                 "detail": run_state.get("detail") or latest.get("detail", ""),
                 "route": default_provider_route() if message.get("target", "main") == "main" else message.get("target", "main"),
                 "gate_status": run_state.get("gate_status", ""),
+                "waiting_for_operator": bool(run_state.get("waiting_for_operator")),
                 "events": message.get("queue_events", []),
             }
         )
@@ -6428,6 +6516,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                         "execution_lifecycle": build_execution_lifecycle(work_items),
                         "agent_targets": AGENT_TARGETS,
                         "agent_personas": AGENT_PERSONAS,
+                        "workflow_states": WORKFLOW_STATES,
                         "review_lanes": REVIEW_LANES,
                         "shared_workspace": build_shared_workspace(),
                         "issue_memory": build_issue_memory_summary(),

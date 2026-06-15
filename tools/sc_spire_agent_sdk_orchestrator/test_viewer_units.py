@@ -342,3 +342,83 @@ def test_gpt_pro_result_record_shape():
     assert record2["verdict"] == "needs_retry"
     assert "schema_valid" in record2
     assert record2["schema_valid"] is False
+
+
+def test_workflow_states_cover_backend_sets():
+    # A4: every status in the DERIVED backend sets must have a WORKFLOW_STATES
+    # entry whose bucket/is_terminal match the set it was derived into. This is
+    # the equivalence guard against backend/schema drift.
+    states = viewer_server.WORKFLOW_STATES
+    assert states, "WORKFLOW_STATES failed to load from workflow_states.json"
+
+    for status in viewer_server.ACTIVE_STATUSES:
+        assert status in states, f"ACTIVE status {status} missing from WORKFLOW_STATES"
+        assert states[status]["bucket"] == "active", f"{status} bucket != active"
+    for status in viewer_server.PREPARED_STATUSES:
+        assert status in states, f"PREPARED status {status} missing from WORKFLOW_STATES"
+        assert states[status]["bucket"] == "prepared", f"{status} bucket != prepared"
+    for status in viewer_server.BLOCKED_STATUSES:
+        assert status in states, f"BLOCKED status {status} missing from WORKFLOW_STATES"
+        assert states[status]["bucket"] == "blocked", f"{status} bucket != blocked"
+    for status in viewer_server.TERMINAL_STATUSES:
+        assert status in states, f"TERMINAL status {status} missing from WORKFLOW_STATES"
+        assert states[status]["is_terminal"] is True, f"{status} is_terminal != True"
+
+    # The four sets must be exactly the original hardcoded contents
+    # (equivalence-preserving derivation).
+    assert viewer_server.ACTIVE_STATUSES == {
+        "queued", "preflight_refining", "planning", "routed", "running", "reviewing",
+        "dispatch_ready", "waiting_claude_review", "waiting_browser_e2e",
+        "waiting_review_and_e2e", "waiting_unity_rendered_evidence",
+        "waiting_validator_lanes", "worker_result_recorded", "closure_ready",
+    }
+    assert viewer_server.PREPARED_STATUSES == {
+        "sent_to_main", "prepared_not_running", "planning_ready",
+    }
+    assert viewer_server.BLOCKED_STATUSES == {"dispatch_blocked", "blocked"}
+    assert viewer_server.TERMINAL_STATUSES == {"done", "failed", "canceled", "removed"}
+
+    # L5: waiting_for_operator exists, is in the waiting bucket, and is NOT in any
+    # of the four derived sets.
+    assert states["waiting_for_operator"]["bucket"] == "waiting"
+    assert "waiting_for_operator" not in viewer_server.ACTIVE_STATUSES
+    assert "waiting_for_operator" not in viewer_server.PREPARED_STATUSES
+    assert "waiting_for_operator" not in viewer_server.BLOCKED_STATUSES
+    assert "waiting_for_operator" not in viewer_server.TERMINAL_STATUSES
+
+
+def test_gpt_pro_request_sets_waiting_then_result_clears():
+    # L5: building the GPT Pro request packet flags the run as waiting on the
+    # operator; recording the result clears it.
+    run_id = f"zz-test-waiting-{uuid.uuid4().hex[:12]}"
+    run_dir = viewer_server.RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        # Simulate the request (writes gpt-pro-waiting.json).
+        viewer_server.build_gpt_pro_request({"id": run_id})
+        waiting_path = run_dir / viewer_server.GPT_PRO_WAITING_ARTIFACT
+        assert waiting_path.exists(), "request did not write waiting flag"
+        flag = json.loads(waiting_path.read_text(encoding="utf-8"))
+        assert flag["status"] == "waiting_for_operator"
+        assert flag.get("since")
+
+        state = viewer_server.run_work_state(run_id)
+        assert state["status"] == "waiting_for_operator"
+        assert state.get("waiting_for_operator") is True
+        assert viewer_server.work_item_bucket(state["status"]) == "active"
+
+        # Simulate the operator answer (clears the waiting flag).
+        viewer_server.record_gpt_pro_result(
+            {
+                "id": run_id,
+                "answer": '{"verdict": "needs_retry", "top_findings": []}',
+            }
+        )
+        assert not waiting_path.exists(), "result did not clear waiting flag"
+        assert (run_dir / viewer_server.GPT_PRO_RESULT_ARTIFACT).exists()
+
+        cleared = viewer_server.run_work_state(run_id)
+        assert cleared["status"] != "waiting_for_operator"
+        assert not cleared.get("waiting_for_operator")
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
