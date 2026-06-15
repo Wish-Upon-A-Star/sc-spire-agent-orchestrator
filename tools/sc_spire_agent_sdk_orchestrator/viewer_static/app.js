@@ -1,4 +1,4 @@
-﻿const state = {
+const state = {
   runs: [],
   selectedRun: null,
   selectedEventIndex: null,
@@ -1182,7 +1182,10 @@ function renderOperationsConsole(payload, run) {
               </div>`
             : ""
         }
-        ${renderAdvisoryCouncil(plan, artifacts)}
+        <details${detailOpenAttr("ops-advisory-details")} data-details-key="ops-advisory-details" class="collapsible-section ops-advisory-collapse">
+          <summary>${escapeHtml(advisoryCouncilSummary(plan))}</summary>
+          ${renderAdvisoryCouncil(plan, artifacts)}
+        </details>
         ${flow ? `<div class="ops-flow">${renderFlowSteps(flow)}</div>` : ""}
         <p class="loop-policy-line">${escapeHtml(
           `루프 정책: 목표 달성까지 짧은 iteration 반복, 결과마다 최소 ${loopPolicy.minimum_validator_lanes_per_result || 4}개 검증 레인`
@@ -1317,6 +1320,19 @@ function renderCurrentCommandCard({ title, currentPrompt, nextPrepared, operator
       }
     </section>
   `;
+}
+
+// One-line summary for the collapsed advisory-council/cerberus section.
+function advisoryCouncilSummary(plan) {
+  const council = plan?.main_advisory_council || {};
+  const deliberation = plan?.cerberus_deliberation || {};
+  if (!council || !council.final_owner) return "메인 판단 보좌관 · 아직 없음";
+  const rounds = Array.isArray(deliberation.rounds) ? deliberation.rounds : [];
+  const advisors = Array.isArray(council.advisors) ? council.advisors : [];
+  const parts = [`메인 판단 보좌관 · ${council.final_owner || "main-orchestrator"}`];
+  if (advisors.length) parts.push(`보좌관 ${advisors.length}`);
+  if (rounds.length) parts.push(`케르베로스 ${rounds.length}라운드`);
+  return parts.join(" · ");
 }
 
 function renderAdvisoryCouncil(plan, artifacts) {
@@ -2120,17 +2136,57 @@ function runBadges(run) {
   return badges;
 }
 
+// Most meaningful badges first; keep the list short so cards stay scannable.
+function runPrimaryBadges(run) {
+  const badges = [];
+  if (run.is_current) badges.push(t.currentRun);
+  if (run.has_claude_response) badges.push(t.liveClaude);
+  else if (run.has_claude_prompt) badges.push(t.promptOnly);
+  if (!badges.length && run.has_chatkit) badges.push(t.chatkit);
+  if (!badges.length) badges.push(t.sampleOnly);
+  return badges.slice(0, 2);
+}
+
+// Short, stable hash for a run id: prefer the trailing hex chunk, else last 8 chars.
+function runShortHash(runId) {
+  const id = String(runId || "");
+  const tail = id.split("-").pop() || id;
+  if (/^[0-9a-f]{6,}$/i.test(tail)) return tail.slice(0, 8);
+  return id.slice(-8);
+}
+
+// Pull HH:MM out of an ISO-ish run id stamp (e.g. 20260615T121606Z-...), KST.
+function runClock(runId) {
+  const match = String(runId || "").match(/(\d{8})T(\d{2})(\d{2})(\d{2})Z/);
+  if (!match) return "";
+  const [, ymd, hh, mm, ss] = match;
+  const iso = `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}T${hh}:${mm}:${ss}Z`;
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return `${hh}:${mm}`;
+  return parsed.toLocaleString("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+// Human-friendly title that is NOT just the raw id (avoids the duplicate-id look).
+function runDisplayTitle(run) {
+  const title = (run.title || "").trim();
+  if (title && title !== run.id) return title;
+  return runShortHash(run.id);
+}
+
 function renderRuns() {
   el.runs.innerHTML = state.runs
     .map((run) => {
       const active = (state.pendingRunId || state.selectedRun?.id) === run.id ? " active" : "";
-      const badges = runBadges(run);
+      const badges = runPrimaryBadges(run);
+      const hash = runShortHash(run.id);
+      const clock = runClock(run.id);
+      const subtitle = clock ? `${hash} · ${clock}` : hash;
       return `
-        <button class="run-item${active}" data-run-id="${escapeHtml(run.id)}" type="button">
-          <span class="run-title">${escapeHtml(run.title || run.id)}</span>
-          <span class="run-name">${escapeHtml(run.id)}</span>
+        <button class="run-item${active}" data-run-id="${escapeHtml(run.id)}" type="button" title="${escapeHtml(run.id)}">
+          <span class="run-title">${escapeHtml(runDisplayTitle(run))}</span>
+          <span class="run-name">${escapeHtml(subtitle)}</span>
           <span class="run-stats">
-            <span>${escapeHtml(t.eventCount)} ${run.event_count || 0}${escapeHtml(t.countSuffix)}</span>
+            <span class="run-count">${run.event_count || 0}${escapeHtml(t.countSuffix)}</span>
             ${badges.map((badge) => `<span>${escapeHtml(badge)}</span>`).join("")}
           </span>
         </button>
