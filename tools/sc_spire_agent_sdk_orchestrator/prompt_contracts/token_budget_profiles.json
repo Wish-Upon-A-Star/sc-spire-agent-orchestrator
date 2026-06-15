@@ -1,0 +1,5 @@
+{
+  "light":   {"context_capsule_chars": 4000,  "issue_memory_items": 3, "review_lenses": ["contract"], "claude": "skip_until_closure", "openai_api": "off_by_default"},
+  "normal":  {"context_capsule_chars": 8000,  "issue_memory_items": 5, "review_lenses": ["intent", "contract", "evidence", "regression"], "claude": "optional", "openai_api": "structured_only"},
+  "closure": {"context_capsule_chars": 12000, "issue_memory_items": 8, "review_lenses": ["intent", "contract", "evidence", "regression", "product"], "claude": "required", "openai_api": "structured_guardrail_allowed"}
+}

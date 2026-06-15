@@ -150,6 +150,13 @@ route `chatgpt_pro_manual_strategist`(auto_spawn:false, manual surface) + person
 - ✅ 나 직접: pytest **18 passed**(+states_cover_backend_sets, gpt_pro_waiting_then_clears) / smoke `{"ok":true}` / GET 새파일 0(A1 회귀X) / workflow_states 31개·waiting 노출 / 상태셋 4개 동등
 - ✅ Codex(복구됨!): problems 2건 지적 → #1 **build_gpt_pro_request가 기존 result를 무조건 삭제(데이터 손실)** → **삭제→타임스탬프 아카이브로 수정**(`gpt-pro-review-result.archived-<ts>.json`). #2 스키마 malformed→빈셋 우회 → **이미 4개 셋 모두 `or {hardcoded}` fallback 있어 방어됨**(Codex가 terminal fallback 못 봄), residual(non-empty 오분류)은 version-controlled+test로 수용.
 
+## E3 (review-matrix/5렌즈) + E5 (mode budget) · ✅ 완료·검증
+
+**E3:** `prompt_contracts/review_lenses.json`(intent/contract/evidence/regression/product, 각 question+reviewer+max_findings) + `load_review_lenses()` + `build_review_matrix(run,mode)`(mode별 렌즈 선택, GET 순수 no-write). run_payload에 `review_matrix` 노출.
+**E5:** `prompt_contracts/token_budget_profiles.json`(light/normal/closure: capsule_chars·issue_items·review_lenses·claude·openai_api) + `budget_profile(mode)`. build_review_matrix·build_context_capsule가 이 budget 따름(issue cap light3/normal5/closure8).
+
+**검증:** ✅ 나 직접 pytest **20 passed**(+matrix_by_mode, budget_profile_modes) / smoke `{"ok":true}` / 라이브 GET review_matrix 노출 + **새파일 0**(A1 회귀X) / budget가 capsule cap 구동 확인 / zero-dep. 추가형 config·GET try/except 가드라 직접검증으로 충분(Codex 생략).
+
 ## 남은 일 (커밋 보류 상태)
 - git 커밋 전부 보류 중 (working tree에 무관 게임 WIP 995개). 사용자가 원하면 `tools/sc_spire_agent_sdk_orchestrator/` + `docs/superpowers/plans/` 만 scoped commit 가능.
 - 변경 파일: viewer_server.py, viewer_static/{app.js,index.html,styles.css}, test_viewer_units.py, smoke_test_viewer.py (+ ~/.codex/config.toml 1줄).

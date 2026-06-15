@@ -300,11 +300,19 @@ def run_payload(run_id: str) -> dict[str, object]:
             context_capsule = read_json_file(capsule_path)
         except Exception:
             context_capsule = None
+    # E3: review_matrix is PURE computation (no writes) so it is safe on this GET
+    # path (A1). Mode is derived from the run's request weight (same as the
+    # capsule), so the matrix matches whatever budget the run is on.
+    try:
+        review_matrix = build_review_matrix(run_id, run_dir, mode=_run_capsule_mode(run_dir))
+    except Exception:
+        review_matrix = []
     return {
         "id": run_id,
         "events": read_transcript(run_dir),
         "plan": plan,
         "context_capsule": context_capsule,
+        "review_matrix": review_matrix,
         "chatkit": read_json_file(chatkit_path) if chatkit_path.exists() else None,
         "transcript_md": markdown_path.read_text(encoding="utf-8", errors="replace") if markdown_path.exists() else "",
         "claude_prompt": claude_prompt_path.read_text(encoding="utf-8", errors="replace") if claude_prompt_path.exists() else "",
@@ -440,6 +448,70 @@ def make_provenance(
     return provenance
 
 
+# E5 mode budget profiles ------------------------------------------------------
+
+TOKEN_BUDGET_PROFILES_PATH = (
+    Path(__file__).resolve().parent / "prompt_contracts" / "token_budget_profiles.json"
+)
+
+# Inline fallback mirrors prompt_contracts/token_budget_profiles.json so the
+# server still has a budget if the file is missing/unreadable (E5).
+TOKEN_BUDGET_PROFILES_FALLBACK: dict[str, dict[str, object]] = {
+    "light": {
+        "context_capsule_chars": 4000,
+        "issue_memory_items": 3,
+        "review_lenses": ["contract"],
+        "claude": "skip_until_closure",
+        "openai_api": "off_by_default",
+    },
+    "normal": {
+        "context_capsule_chars": 8000,
+        "issue_memory_items": 5,
+        "review_lenses": ["intent", "contract", "evidence", "regression"],
+        "claude": "optional",
+        "openai_api": "structured_only",
+    },
+    "closure": {
+        "context_capsule_chars": 12000,
+        "issue_memory_items": 8,
+        "review_lenses": ["intent", "contract", "evidence", "regression", "product"],
+        "claude": "required",
+        "openai_api": "structured_guardrail_allowed",
+    },
+}
+
+
+def _load_token_budget_profiles() -> dict[str, dict[str, object]]:
+    """Load the mode budget profiles once (E5). Falls back to the inline table on
+    any error so callers always get a usable profile dict."""
+    try:
+        loaded = json.loads(TOKEN_BUDGET_PROFILES_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {k: dict(v) for k, v in TOKEN_BUDGET_PROFILES_FALLBACK.items()}
+    if not isinstance(loaded, dict):
+        return {k: dict(v) for k, v in TOKEN_BUDGET_PROFILES_FALLBACK.items()}
+    profiles = {
+        str(name): value for name, value in loaded.items() if isinstance(value, dict)
+    }
+    return profiles or {k: dict(v) for k, v in TOKEN_BUDGET_PROFILES_FALLBACK.items()}
+
+
+TOKEN_BUDGET_PROFILES: dict[str, dict[str, object]] = _load_token_budget_profiles()
+
+
+def budget_profile(mode: str) -> dict[str, object]:
+    """Return the token-budget profile for ``mode`` (E5).
+
+    Unknown / falsy modes resolve to ``normal``. Returns a shallow copy so callers
+    cannot mutate the cached profile in place.
+    """
+    profiles = TOKEN_BUDGET_PROFILES
+    profile = profiles.get(mode)
+    if not isinstance(profile, dict):
+        profile = profiles.get("normal") or TOKEN_BUDGET_PROFILES_FALLBACK["normal"]
+    return dict(profile)
+
+
 # E2 context capsule -----------------------------------------------------------
 
 CONTEXT_CAPSULE_ARTIFACT = "context-capsule.json"
@@ -512,7 +584,13 @@ def build_context_capsule(run_id: str, run_dir: Path, mode: str = "normal") -> d
     raw = str(operator.get("original_message", ""))
     refined = str(operator.get("refined_message", ""))
 
-    issue_cap = 3 if mode == "light" else 8
+    # issue_memory_items is driven by the mode budget profile (E5): light->3,
+    # normal->5, closure->8 (unknown modes resolve to normal).
+    issue_cap_raw = budget_profile(mode).get("issue_memory_items", 8)
+    try:
+        issue_cap = int(issue_cap_raw)
+    except (TypeError, ValueError):
+        issue_cap = 8
     issue_query = "\n".join([raw, refined]).strip()
     relevant_issues: list[dict[str, object]] = []
     if issue_query:
@@ -561,6 +639,74 @@ def write_context_capsule(run_id: str, run_dir: Path, mode: str = "normal") -> d
     capsule["provenance"] = make_provenance("contract_generated", "viewer-server")
     write_json(run_dir / CONTEXT_CAPSULE_ARTIFACT, capsule)
     return capsule
+
+
+# E3 review matrix / lenses ----------------------------------------------------
+
+REVIEW_LENSES_PATH = (
+    Path(__file__).resolve().parent / "prompt_contracts" / "review_lenses.json"
+)
+
+# Inline fallback mirrors prompt_contracts/review_lenses.json (E3). Order matters:
+# build_review_matrix preserves it when emitting the selected lenses.
+REVIEW_LENSES_FALLBACK: list[dict[str, object]] = [
+    {"key": "intent", "question": "사용자 원문에서 누락/왜곡된 요구가 있는가?", "reviewer": "prompt-validator", "max_findings": 3},
+    {"key": "contract", "question": "plan→worker-dispatch→evidence-contract→review-gate→closure가 연결됐는가?", "reviewer": "validator-contract", "max_findings": 5},
+    {"key": "evidence", "question": "완료 주장에 필요한 실제 증거(파일/명령/스크린샷/렌더링)가 있는가?", "reviewer": "claude-reviewer", "max_findings": 5},
+    {"key": "regression", "question": "이전 실패가 acceptance gate로 승격됐고 재발하지 않았는가?", "reviewer": "issue-memory-agent", "max_findings": 4},
+    {"key": "product", "question": "플레이어 관점 품질/게임성/상업성에서 과장된 주장이 있는가?", "reviewer": "product-reviewer", "max_findings": 4},
+]
+
+
+def load_review_lenses() -> list[dict[str, object]]:
+    """Load the five review lenses once (E3). Falls back to the inline list if the
+    file is missing/unreadable. Returns a list (canonical order) of lens dicts,
+    each with key/question/reviewer/max_findings."""
+    try:
+        loaded = json.loads(REVIEW_LENSES_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [dict(lens) for lens in REVIEW_LENSES_FALLBACK]
+    lenses = loaded.get("lenses") if isinstance(loaded, dict) else None
+    if not isinstance(lenses, dict):
+        return [dict(lens) for lens in REVIEW_LENSES_FALLBACK]
+    # Preserve canonical ordering (intent..product) regardless of dict order.
+    order = [lens["key"] for lens in REVIEW_LENSES_FALLBACK]
+    out: list[dict[str, object]] = []
+    for key in order:
+        value = lenses.get(key)
+        if isinstance(value, dict):
+            entry = dict(value)
+            entry.setdefault("key", key)
+            out.append(entry)
+    # Include any extra lenses defined in the file but not in the canonical order.
+    for key, value in lenses.items():
+        if key not in order and isinstance(value, dict):
+            entry = dict(value)
+            entry.setdefault("key", key)
+            out.append(entry)
+    return out or [dict(lens) for lens in REVIEW_LENSES_FALLBACK]
+
+
+def build_review_matrix(
+    run_id: str, run_dir: Path, mode: str = "normal"
+) -> list[dict[str, object]]:
+    """Return the review lenses SELECTED for this run's mode (E3 + E5).
+
+    Pure computation, NO file writes (A1): safe to call on the GET path. The set
+    of lenses is driven by ``budget_profile(mode)["review_lenses"]``:
+    light -> contract only; normal -> intent/contract/evidence/regression;
+    closure -> all five. Each returned lens carries its question + max_findings.
+    """
+    selected_keys = budget_profile(mode).get("review_lenses")
+    if not isinstance(selected_keys, list):
+        selected_keys = []
+    by_key = {str(lens.get("key")): lens for lens in load_review_lenses()}
+    matrix: list[dict[str, object]] = []
+    for key in selected_keys:
+        lens = by_key.get(str(key))
+        if isinstance(lens, dict):
+            matrix.append(dict(lens))
+    return matrix
 
 
 # E4 reviewer output schema validator -----------------------------------------

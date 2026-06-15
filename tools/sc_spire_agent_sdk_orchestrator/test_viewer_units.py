@@ -250,6 +250,67 @@ def test_build_context_capsule_shape():
         shutil.rmtree(run_dir, ignore_errors=True)
 
 
+def test_build_review_matrix_by_mode():
+    # E3: build_review_matrix selects lenses per mode (driven by E5 budget).
+    # light < normal < closure in lens count; closure == all 5; each selected
+    # lens carries its question + max_findings.
+    run_id = f"zz-test-matrix-{uuid.uuid4().hex[:12]}"
+    run_dir = viewer_server.RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        light = viewer_server.build_review_matrix(run_id, run_dir, mode="light")
+        normal = viewer_server.build_review_matrix(run_id, run_dir, mode="normal")
+        closure = viewer_server.build_review_matrix(run_id, run_dir, mode="closure")
+
+        assert len(light) < len(normal) < len(closure), (
+            f"expected light<normal<closure, got "
+            f"{len(light)}/{len(normal)}/{len(closure)}"
+        )
+        assert len(closure) == 5, f"closure must fire all 5 lenses, got {len(closure)}"
+
+        for matrix in (light, normal, closure):
+            assert isinstance(matrix, list)
+            for lens in matrix:
+                assert "question" in lens and isinstance(lens["question"], str) and lens["question"]
+                assert "max_findings" in lens and isinstance(lens["max_findings"], int)
+                assert "key" in lens
+
+        # Unknown mode resolves to the normal lens set.
+        unknown = viewer_server.build_review_matrix(run_id, run_dir, mode="bogus")
+        assert len(unknown) == len(normal)
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_budget_profile_modes():
+    # E5: budget_profile returns dicts with the required keys; unknown->normal;
+    # issue_memory_items ordering light < normal < closure.
+    required = {
+        "context_capsule_chars",
+        "issue_memory_items",
+        "review_lenses",
+        "claude",
+        "openai_api",
+    }
+    light = viewer_server.budget_profile("light")
+    normal = viewer_server.budget_profile("normal")
+    closure = viewer_server.budget_profile("closure")
+
+    for profile in (light, normal, closure):
+        assert isinstance(profile, dict)
+        assert required <= set(profile), f"missing keys: {required - set(profile)}"
+
+    assert (
+        light["issue_memory_items"]
+        < normal["issue_memory_items"]
+        < closure["issue_memory_items"]
+    )
+
+    # Unknown / falsy modes resolve to the normal profile.
+    assert viewer_server.budget_profile("bogus") == normal
+    assert viewer_server.budget_profile("") == normal
+
+
 def test_validate_review_output_accepts_good():
     # E4: a well-formed reviewer output validates.
     good = {

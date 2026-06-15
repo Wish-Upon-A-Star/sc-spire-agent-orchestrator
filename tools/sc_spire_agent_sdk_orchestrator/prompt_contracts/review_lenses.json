@@ -1,0 +1,11 @@
+{
+  "contract": "review_lenses",
+  "purpose": "Five review lenses (E3). Verification is done first as multiple LENSES (one question + a max_findings cap per lens), not multiple models. build_review_matrix() selects which lenses fire for a run based on its mode (see token_budget_profiles.json review_lenses). Each lens carries a key, a single question (ko), the assigned reviewer, and max_findings. This file is read-only contract data; computing the matrix is pure and writes nothing (A1).",
+  "lenses": {
+    "intent": {"key": "intent", "question": "사용자 원문에서 누락/왜곡된 요구가 있는가?", "reviewer": "prompt-validator", "max_findings": 3},
+    "contract": {"key": "contract", "question": "plan→worker-dispatch→evidence-contract→review-gate→closure가 연결됐는가?", "reviewer": "validator-contract", "max_findings": 5},
+    "evidence": {"key": "evidence", "question": "완료 주장에 필요한 실제 증거(파일/명령/스크린샷/렌더링)가 있는가?", "reviewer": "claude-reviewer", "max_findings": 5},
+    "regression": {"key": "regression", "question": "이전 실패가 acceptance gate로 승격됐고 재발하지 않았는가?", "reviewer": "issue-memory-agent", "max_findings": 4},
+    "product": {"key": "product", "question": "플레이어 관점 품질/게임성/상업성에서 과장된 주장이 있는가?", "reviewer": "product-reviewer", "max_findings": 4}
+  }
+}
