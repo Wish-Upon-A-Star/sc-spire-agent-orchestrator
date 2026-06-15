@@ -238,6 +238,7 @@ def reconcile_run_artifacts(run_id: str, run_dir: Path) -> dict[str, object]:
     summary: dict[str, object] = {
         "reconciled": [],
         "skipped": False,
+        "provenance": make_provenance("contract_generated", "viewer-server"),
     }
     reconciled: list[str] = summary["reconciled"]  # type: ignore[assignment]
     if not (run_dir / "d-drive-report-pack.json").exists():
@@ -373,6 +374,55 @@ def enrich_dispatch_preview(plan: dict[str, object]) -> dict[str, object]:
 
 def utc_timestamp() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+PROVENANCE_SOURCE_TYPES = (
+    "contract_generated",
+    "local_self_check",
+    "external_codex_cli",
+    "live_claude_cli",
+    "live_openai_api",
+    "external_chatgpt_pro_manual",
+    "operator_manual",
+)
+
+
+def make_provenance(
+    source_type: str,
+    created_by: str,
+    *,
+    command: str = "",
+    exit_code: int | None = None,
+    input_artifacts: list[str] | None = None,
+    verified_by: list[str] | None = None,
+    is_claim_evidence: bool = False,
+) -> dict[str, object]:
+    """Build a provenance block for artifacts the viewer writes (A2).
+
+    Stamps trust traceability onto NEW viewer-written artifacts. Empty optional
+    fields are omitted. ``source_type`` is validated against
+    ``PROVENANCE_SOURCE_TYPES``.
+    """
+    if source_type not in PROVENANCE_SOURCE_TYPES:
+        raise ValueError(
+            f"invalid provenance source_type {source_type!r}; "
+            f"allowed: {', '.join(PROVENANCE_SOURCE_TYPES)}"
+        )
+    provenance: dict[str, object] = {
+        "source_type": source_type,
+        "created_by": created_by,
+        "is_claim_evidence": bool(is_claim_evidence),
+        "stamped_at": utc_timestamp(),
+    }
+    if command:
+        provenance["command"] = command
+    if exit_code is not None:
+        provenance["exit_code"] = exit_code
+    if input_artifacts:
+        provenance["input_artifacts"] = list(input_artifacts)
+    if verified_by:
+        provenance["verified_by"] = list(verified_by)
+    return provenance
 
 
 def summarize_run_context(run_id: str) -> dict[str, object]:
@@ -1230,6 +1280,7 @@ def build_rule_based_prompt(text: str, target: str, run_context: dict[str, objec
         "missing_fields": missing,
         "warnings": warnings,
         "run_context": run_context,
+        "provenance": make_provenance("local_self_check", "viewer-server"),
     }
 
 
@@ -1339,6 +1390,9 @@ def call_prompt_preflight_model(text: str, target: str, run_context: dict[str, o
         "refined_length": len(refined_prompt),
         "original_length": len(text),
         "refined_prompt": refined_prompt,
+        "provenance": make_provenance(
+            "live_openai_api", "viewer-server", command=f"openai_responses_api:{model}"
+        ),
     }
 
 
@@ -2535,6 +2589,9 @@ def record_run_result(payload: dict[str, object]) -> dict[str, object]:
         "evidence": evidence if isinstance(evidence, list) else [],
         "risks": risks if isinstance(risks, list) else [],
         "source": "operator_recorded_from_viewer",
+        "provenance": make_provenance(
+            "operator_manual", "operator", is_claim_evidence=True
+        ),
     }
     write_json(run_dir / artifact_name, result)
     recipient = "main-orchestrator"
@@ -5723,24 +5780,62 @@ def build_adapter_health(sdk_status: dict[str, object] | None = None) -> dict[st
     openai_key_present = bool(os.environ.get("OPENAI_API_KEY")) or DESKTOP_OPENAI_KEY.exists()
     gemini_key_present = bool(os.environ.get("GEMINI_API_KEY"))
     gemini_enabled = os.environ.get("SC_SPIRE_GEMINI_ENABLED", "0") == "1"
+
+    def split_health(
+        *,
+        manual_surface_available: bool,
+        auto_spawn_available: bool,
+        cli_path: str = "",
+        can_write_artifact_directly: bool = False,
+    ) -> dict[str, object]:
+        # A3: split the old single `callable` bool into a manual/auto/live model.
+        # `callable` is kept as a derived alias so existing consumers/smoke test
+        # do not break.
+        return {
+            "manual_surface_available": bool(manual_surface_available),
+            "auto_spawn_available": bool(auto_spawn_available),
+            "cli_path": cli_path or "",
+            "requires_operator_copy_paste": not bool(auto_spawn_available),
+            "can_write_artifact_directly": bool(can_write_artifact_directly),
+            "callable": bool(auto_spawn_available or manual_surface_available),
+        }
+
+    codex_auto = bool(codex_probe["available"])
+    claude_auto = bool(claude_probe["available"])
+    openai_auto = bool(sdk_status.get("importable")) and openai_key_present
+    gemini_auto = gemini_enabled and gemini_key_present
     return {
         "codex_subscription_worker": {
             "configured": True,
-            "callable": True,
+            **split_health(
+                manual_surface_available=True,
+                auto_spawn_available=codex_auto,
+                cli_path=codex_probe["path"],
+                can_write_artifact_directly=True,
+            ),
             "mode": "current_codex_app_session" if not codex_probe["available"] else "codex_cli_or_current_app",
             "path": codex_probe["path"],
             "truth": "현재 Codex 앱 세션은 로컬 구현/검증 worker로 사용 가능하지만, 별도 Codex CLI 자동 스폰은 path가 있을 때만 가능합니다.",
         },
         "claude_collaborator": {
             "configured": True,
-            "callable": bool(claude_probe["available"]),
+            **split_health(
+                manual_surface_available=True,
+                auto_spawn_available=claude_auto,
+                cli_path=claude_probe["path"] if claude_auto else "",
+                can_write_artifact_directly=claude_auto,
+            ),
             "mode": "claude_cli_subscription",
             "path": claude_probe["path"],
             "truth": "Claude CLI가 있으면 live review 버튼/closure gate에서 실제 Claude MAX 검토를 호출할 수 있습니다.",
         },
         "openai_agents_sdk": {
             "configured": True,
-            "callable": bool(sdk_status.get("importable")) and openai_key_present,
+            **split_health(
+                manual_surface_available=True,
+                auto_spawn_available=openai_auto,
+                can_write_artifact_directly=openai_auto,
+            ),
             "mode": "agents_sdk_pattern_always_live_api_optional",
             "path": "",
             "truth": "Agents SDK pattern/manifest는 항상 사용합니다. live API runner는 SDK import와 OPENAI_API_KEY가 있을 때만 예산 gate 뒤에서 호출합니다.",
@@ -5751,7 +5846,11 @@ def build_adapter_health(sdk_status: dict[str, object] | None = None) -> dict[st
         },
         "gemini_collaborator": {
             "configured": gemini_enabled,
-            "callable": gemini_enabled and gemini_key_present,
+            **split_health(
+                manual_surface_available=gemini_enabled,
+                auto_spawn_available=gemini_auto,
+                can_write_artifact_directly=gemini_auto,
+            ),
             "mode": "gemini_pending_key" if not gemini_key_present else "gemini_configured",
             "path": "",
             "truth": "Gemini는 GEMINI_API_KEY와 SC_SPIRE_GEMINI_ENABLED=1이 모두 있어야 독립 검토 레인으로 호출합니다.",

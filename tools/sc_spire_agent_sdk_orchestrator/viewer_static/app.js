@@ -2047,6 +2047,10 @@ function renderProviderRouting(config, adapterHealth = {}) {
           const enabled = route.enabled !== false;
           const health = adapterHealth[name] || {};
           const callable = Boolean(health.callable);
+          const autoSpawn = Boolean(health.auto_spawn_available);
+          const manualSurface = Boolean(health.manual_surface_available);
+          const spawnLabel = autoSpawn ? "자동 가능" : manualSurface ? "수동 전용" : "호출 대기";
+          const spawnClass = autoSpawn ? "enabled" : manualSurface ? "manual" : "disabled";
           const model = route.default_model || route.effective_model || "";
           const isDefault = config.default_route === name;
           const bestFor = (route.best_for || []).slice(0, 3).join(", ");
@@ -2055,6 +2059,7 @@ function renderProviderRouting(config, adapterHealth = {}) {
               <div class="provider-status-row">
                 <span class="provider-status ${enabled ? "enabled" : "disabled"}">${escapeHtml(isDefault ? t.routeDefault : enabled ? t.routeEnabled : t.routeDisabled)}</span>
                 <span class="provider-status ${callable ? "enabled" : "disabled"}">${escapeHtml(callable ? "호출 가능" : "호출 대기")}</span>
+                <span class="provider-status ${spawnClass}">${escapeHtml(spawnLabel)}</span>
               </div>
               <h4>${escapeHtml(routeLabel(name))}</h4>
               <p><strong>${escapeHtml(t.routePriority)}</strong>: ${escapeHtml(route.priority || "")}</p>
@@ -2062,6 +2067,7 @@ function renderProviderRouting(config, adapterHealth = {}) {
               <p><strong>${escapeHtml(t.routeSurface)}</strong>: ${escapeHtml(route.surface || "")}</p>
               <p><strong>${escapeHtml(t.routeModel)}</strong>: ${escapeHtml(model)}</p>
               <p><strong>Adapter</strong>: ${escapeHtml(health.mode || "상태 확인 필요")}</p>
+              <p><strong>실행</strong>: ${escapeHtml(autoSpawn ? "자동 스폰 가능" : manualSurface ? "운영자 수동 복붙 필요" : "미연결")}${health.cli_path ? ` (${escapeHtml(health.cli_path)})` : ""}</p>
               ${health.import_error ? `<p><strong>Import</strong>: ${escapeHtml(health.import_error)}</p>` : ""}
               ${health.installed === false ? `<p><strong>Install</strong>: ${escapeHtml("패키지 미설치 또는 감지 불가")}</p>` : ""}
               <p class="provider-truth">${escapeHtml(health.truth || "실제 호출 상태가 아직 기록되지 않았습니다.")}</p>

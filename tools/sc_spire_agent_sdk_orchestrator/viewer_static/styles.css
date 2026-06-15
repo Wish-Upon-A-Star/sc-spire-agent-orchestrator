@@ -2496,6 +2496,11 @@ h2 {
   color: var(--danger);
 }
 
+.provider-status.manual {
+  border-color: rgba(232, 197, 122, 0.55);
+  color: var(--warning, #e8c57a);
+}
+
 .provider-card .provider-truth {
   color: var(--text);
   font-size: 10.5px;

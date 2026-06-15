@@ -115,6 +115,13 @@ Codex가 진짜 버그 4건 지적:
 - ✅ Codex: **SOUND** — run_payload 완전 side-effect-free, mutating POST 6+개 전부 reconcile 연결(누락 0), `run_claude_review`는 record_run_result 경유라 이중호출 없음, lookup 빈문자열→폴백 안전, reconcile `id` 검증+path-traversal 차단(`safe_run_dir`)+예외 삼킴(mutating POST 안 깨짐)
 - 수정 불필요.
 
+## A2 (provenance) + A3 (callable split) · ✅ 완료·검증
+
+**A2:** `make_provenance(source_type, created_by, ...)` 헬퍼 + `PROVENANCE_SOURCE_TYPES` enum(contract_generated/local_self_check/external_codex_cli/live_claude_cli/live_openai_api/external_chatgpt_pro_manual/operator_manual). 뷰어가 쓰는 artifact에 provenance 부착: record_run_result→operator_manual, reconcile→contract_generated, preflight 로컬→local_self_check / 라이브→live_openai_api. (전체 소급 아님, 신규 write부터.)
+**A3:** adapter_health `callable` 단일 → `manual_surface_available/auto_spawn_available/cli_path/requires_operator_copy_paste/can_write_artifact_directly` 5키 분리. `callable`=`auto_spawn or manual` 파생 alias로 back-compat 유지. 프론트에 "자동 가능/수동 전용" 배지. 캐시 v6.
+
+**검증:** ✅ 나 직접 pytest **12 passed**(+make_provenance/record_result_provenance/adapter_split 3개) / smoke `{"ok":true}`(callable 유지) / 라이브 adapter_health 5키 확인. 저위험 추가형이라 Codex는 다음 큰 항목과 배치.
+
 ## 남은 일 (커밋 보류 상태)
 - git 커밋 전부 보류 중 (working tree에 무관 게임 WIP 995개). 사용자가 원하면 `tools/sc_spire_agent_sdk_orchestrator/` + `docs/superpowers/plans/` 만 scoped commit 가능.
 - 변경 파일: viewer_server.py, viewer_static/{app.js,index.html,styles.css}, test_viewer_units.py, smoke_test_viewer.py (+ ~/.codex/config.toml 1줄).

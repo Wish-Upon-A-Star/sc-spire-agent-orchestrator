@@ -4,6 +4,8 @@ import shutil
 import uuid
 from pathlib import Path
 
+import pytest
+
 _SPEC = importlib.util.spec_from_file_location(
     "viewer_server",
     Path(__file__).resolve().parent / "viewer_server.py",
@@ -104,3 +106,80 @@ def test_get_run_is_read_only():
         assert after == before, f"run_payload created files: {sorted(after - before)}"
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_make_provenance_shape():
+    # A2: provenance helper must expose the required keys and validate source_type.
+    prov = viewer_server.make_provenance("operator_manual", "operator", is_claim_evidence=True)
+    for key in ("source_type", "created_by", "is_claim_evidence", "stamped_at"):
+        assert key in prov, f"provenance missing required key {key}"
+    assert prov["source_type"] == "operator_manual"
+    assert prov["created_by"] == "operator"
+    assert prov["is_claim_evidence"] is True
+    # Empty optional fields are omitted.
+    assert "command" not in prov
+    assert "exit_code" not in prov
+    assert "input_artifacts" not in prov
+    assert "verified_by" not in prov
+    # Optional fields are included when supplied.
+    full = viewer_server.make_provenance(
+        "live_openai_api",
+        "viewer-server",
+        command="openai_responses_api:gpt",
+        exit_code=0,
+        input_artifacts=["a.json"],
+        verified_by=["validator-code-level"],
+    )
+    assert full["command"] == "openai_responses_api:gpt"
+    assert full["exit_code"] == 0
+    assert full["input_artifacts"] == ["a.json"]
+    assert full["verified_by"] == ["validator-code-level"]
+    # Invalid source_type is rejected.
+    with pytest.raises(ValueError):
+        viewer_server.make_provenance("not_a_real_source", "operator")
+
+
+def test_record_result_has_provenance():
+    # A2: the result record built by record_run_result must carry a provenance
+    # block stamped as operator_manual.
+    run_id = f"zz-test-provenance-{uuid.uuid4().hex[:12]}"
+    run_dir = viewer_server.RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        result = viewer_server.record_run_result(
+            {
+                "run_id": run_id,
+                "result_type": "worker",
+                "summary": "provenance smoke summary",
+            }
+        )
+        record = result["result"]
+        assert "provenance" in record, "result record missing provenance"
+        assert record["provenance"]["source_type"] == "operator_manual"
+        assert record["source"] == "operator_recorded_from_viewer"
+        # Verify it was actually persisted to disk too.
+        written = json.loads((run_dir / result["artifact"]).read_text(encoding="utf-8"))
+        assert written["provenance"]["source_type"] == "operator_manual"
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_adapter_health_splits_manual_vs_auto():
+    # A3: each adapter must expose the 5 new keys, and callable must be the
+    # derived alias of (auto_spawn_available or manual_surface_available).
+    health = viewer_server.build_adapter_health()
+    new_keys = {
+        "manual_surface_available",
+        "auto_spawn_available",
+        "cli_path",
+        "requires_operator_copy_paste",
+        "can_write_artifact_directly",
+    }
+    assert health, "build_adapter_health returned empty"
+    for name, adapter in health.items():
+        assert new_keys <= set(adapter), f"{name} missing split keys: {new_keys - set(adapter)}"
+        assert adapter["callable"] == (
+            adapter["auto_spawn_available"] or adapter["manual_surface_available"]
+        ), f"{name} callable is not the derived alias"
+        assert adapter["requires_operator_copy_paste"] == (not adapter["auto_spawn_available"])
+        assert isinstance(adapter["cli_path"], str)
