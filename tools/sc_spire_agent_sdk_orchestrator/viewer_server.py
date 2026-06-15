@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -2285,8 +2286,99 @@ def short_hash(value: str) -> str:
     return hashlib.sha1(value.encode("utf-8", errors="replace")).hexdigest()[:8]
 
 
+def static_asset_version() -> str:
+    """B1: compute a content-derived cache-bust token from app.js + styles.css.
+
+    Hashes the bytes of both files (stdlib hashlib.sha1) -> short hex. The token
+    changes automatically whenever either asset's content changes, so the
+    `?v=` query string no longer needs manual bumping. Returns a stable
+    fallback if the files cannot be read.
+    """
+    digest = hashlib.sha1()
+    for name in ("app.js", "styles.css"):
+        try:
+            digest.update(name.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update((STATIC_DIR / name).read_bytes())
+        except OSError:
+            digest.update(b"<missing>")
+    return digest.hexdigest()[:12]
+
+
+def render_index_html() -> bytes:
+    """B1: serve index.html with the `?v=` tokens replaced by a content hash.
+
+    Read-only: the on-disk index.html is NOT modified (A1). The literal
+    `?v=...` in the file remains as a fallback default; this overrides it at
+    serve time so browsers always fetch the current app.js/styles.css.
+    """
+    text = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    version = static_asset_version()
+    # Anchored on the leading "/" so only the real /app.js?v= and /styles.css?v=
+    # attribute URLs are touched (not e.g. "notapp.js?v="); value stops at the quote.
+    text = re.sub(
+        r"(/(?:app\.js|styles\.css)\?v=)[^\"'\s]*",
+        lambda m: m.group(1) + version,
+        text,
+    )
+    return text.encode("utf-8")
+
+
+def write_json_atomic(path: Path, payload: object) -> None:
+    """Write JSON atomically: serialize to a temp file in the SAME directory,
+    flush+fsync, then os.replace() over the target (atomic on the same fs).
+
+    A6: prevents partial/torn writes when auto-progress + UI buttons + polling
+    + manual recording race on the same artifact. Preserves the prior style:
+    UTF-8, ensure_ascii=False, indent=2, trailing newline.
+    """
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        # If os.replace succeeded the tmp is gone; this only cleans up on error.
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:  # pragma: no cover - best-effort cleanup
+            pass
+
+
 def write_json(path: Path, payload: object) -> None:
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # A6: all existing callers get atomicity for free by delegating here.
+    write_json_atomic(path, payload)
+
+
+# A6: per-run write locks. A module dict of threading.Locks keyed by run_id,
+# guarded by a meta-lock, so concurrent mutations of the same run serialize
+# while different runs proceed in parallel.
+_RUN_WRITE_LOCKS: dict[str, threading.Lock] = {}
+_RUN_WRITE_LOCKS_META = threading.Lock()
+
+
+@contextlib.contextmanager
+def run_write_lock(run_id: str):
+    """Serialize multi-file mutations for a single run_id (A6).
+
+    Usage:
+        with run_write_lock(run_id):
+            ... mutate several files under the run dir ...
+    """
+    key = str(run_id or "")
+    with _RUN_WRITE_LOCKS_META:
+        lock = _RUN_WRITE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _RUN_WRITE_LOCKS[key] = lock
+    with lock:
+        yield
 
 
 def read_text_excerpt(path: Path, *, max_chars: int = 4000) -> str:
@@ -6702,7 +6794,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             if parsed.path == "/":
-                self._send_file(STATIC_DIR / "index.html")
+                # B1: inject content-derived ?v= at serve time (read-only; the
+                # on-disk index.html is not rewritten).
+                raw = render_index_html()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(raw)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(raw)
                 return
             if parsed.path == "/api/runs":
                 started = time.time()

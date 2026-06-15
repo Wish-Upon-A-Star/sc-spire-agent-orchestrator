@@ -500,3 +500,172 @@ def test_gpt_pro_request_sets_waiting_then_result_clears():
         assert not cleared.get("waiting_for_operator")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_write_json_atomic():
+    # A6: write_json_atomic must produce a readable, valid-JSON file and leave
+    # no leftover .tmp files in the directory.
+    run_id = f"zz-test-atomic-{uuid.uuid4().hex[:12]}"
+    run_dir = viewer_server.RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        target = run_dir / "atomic-sample.json"
+        payload = {"hello": "world", "ko": "한글", "n": 42, "items": [1, 2, 3]}
+        viewer_server.write_json_atomic(target, payload)
+
+        assert target.exists()
+        loaded = json.loads(target.read_text(encoding="utf-8"))
+        assert loaded == payload
+        # Trailing newline + non-ascii preserved (ensure_ascii=False style).
+        text = target.read_text(encoding="utf-8")
+        assert text.endswith("\n")
+        assert "한글" in text
+
+        # No leftover temp files anywhere in the run dir.
+        leftovers = [p.name for p in run_dir.iterdir() if p.name.endswith(".tmp")]
+        assert leftovers == [], f"leftover temp files: {leftovers}"
+
+        # write_json delegates to the atomic path: same guarantees.
+        target2 = run_dir / "atomic-via-write-json.json"
+        viewer_server.write_json(target2, payload)
+        assert json.loads(target2.read_text(encoding="utf-8")) == payload
+        assert [p.name for p in run_dir.iterdir() if p.name.endswith(".tmp")] == []
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_reconcile_is_idempotent_and_writes():
+    # A7: reconcile_run_artifacts on a temp run dir with d-drive-report-pack.json
+    # must produce derived artifacts and be safe to call twice.
+    run_id = f"zz-test-reconcile-{uuid.uuid4().hex[:12]}"
+    run_dir = viewer_server.RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        (run_dir / "orchestration-plan.json").write_text(
+            json.dumps({"kind": "operator_prompt_handoff"}), encoding="utf-8"
+        )
+        (run_dir / "d-drive-report-pack.json").write_text(
+            json.dumps({"kind": "d_drive_report_pack", "files": []}), encoding="utf-8"
+        )
+
+        summary1 = viewer_server.reconcile_run_artifacts(run_id, run_dir)
+        assert isinstance(summary1, dict)
+        assert "reconciled" in summary1
+        # The reconcile trigger (report pack present) means it should not skip.
+        assert summary1.get("skipped") is not True
+        derived = [
+            "report-pack-judgment.json",
+            "report-evidence-audit.json",
+            "goal-completion-audit.json",
+        ]
+        for name in derived:
+            assert (run_dir / name).exists(), f"reconcile did not write {name}"
+
+        # Second call must not raise and the derived artifacts must still exist.
+        summary2 = viewer_server.reconcile_run_artifacts(run_id, run_dir)
+        assert isinstance(summary2, dict)
+        for name in derived:
+            assert (run_dir / name).exists(), f"{name} missing after 2nd reconcile"
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_lookup_message_effective_run_returns_run_id():
+    # A7: unit-level proof of the created_run_id plumbing (no live server).
+    # Append a message + an event that ties it to a run, then assert
+    # lookup_message_effective_run resolves that run id.
+    msg_id = f"zz-test-msg-{uuid.uuid4().hex[:12]}"
+    run_id = f"zz-test-run-{uuid.uuid4().hex[:12]}"
+    events_path = viewer_server.OPERATOR_MESSAGE_EVENTS
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    marker = f"__atomic_test_event__:{msg_id}"
+    appended_line = json.dumps(
+        {
+            "message_id": msg_id,
+            "run_id": run_id,
+            "status": "dispatch_ready",
+            "marker": marker,
+        }
+    )
+    with open(events_path, "a", encoding="utf-8") as handle:
+        handle.write(appended_line + "\n")
+    try:
+        result = viewer_server.lookup_message_effective_run(
+            msg_id, {"id": msg_id, "status": "queued"}
+        )
+        assert "created_run_id" in result
+        assert result["created_run_id"] == run_id
+    finally:
+        # Remove only the line we appended, leaving the rest of the log intact.
+        try:
+            lines = events_path.read_text(encoding="utf-8").splitlines()
+            kept = [ln for ln in lines if marker not in ln]
+            events_path.write_text(
+                ("\n".join(kept) + "\n") if kept else "", encoding="utf-8"
+            )
+        except OSError:
+            pass
+
+
+def test_post_message_returns_created_run_id():
+    # A7 (live, skip-if-no-server): POST /api/messages should return a response
+    # whose body carries the created_run_id key. Skips gracefully when the
+    # viewer server on 8766 is unreachable.
+    import urllib.error
+    import urllib.request
+
+    base = "http://127.0.0.1:8766"
+    body = json.dumps(
+        {"message": "atomic-write regression smoke", "target": "prompt-preflight-agent"}
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        base + "/api/messages",
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ConnectionError) as exc:
+        pytest.skip(f"viewer server on 8766 unreachable: {exc}")
+    assert "created_run_id" in payload, f"response missing created_run_id: {payload}"
+
+
+def test_static_asset_version_changes():
+    # B1: static_asset_version returns a non-empty short hex token, and its
+    # value is derived from app.js + styles.css bytes (changes with content).
+    version = viewer_server.static_asset_version()
+    assert isinstance(version, str)
+    assert version
+    int(version, 16)  # must be valid hex
+    assert len(version) == 12
+
+    # Content-derived: temporarily mutate app.js and confirm the token changes,
+    # then restore the original bytes exactly.
+    app_js = viewer_server.STATIC_DIR / "app.js"
+    original = app_js.read_bytes()
+    try:
+        app_js.write_bytes(original + b"\n/* atomic-test cache-bust probe */\n")
+        changed = viewer_server.static_asset_version()
+        assert changed != version, "version did not change when app.js content changed"
+    finally:
+        app_js.write_bytes(original)
+    # Restored content -> original token again (stability).
+    assert viewer_server.static_asset_version() == version
+
+
+def test_render_index_injects_version():
+    # B1: the served "/" HTML must contain app.js?v=<version> with the computed
+    # token, and serving must NOT modify index.html on disk.
+    index_path = viewer_server.STATIC_DIR / "index.html"
+    before = index_path.read_bytes()
+    html = viewer_server.render_index_html().decode("utf-8")
+    after = index_path.read_bytes()
+
+    version = viewer_server.static_asset_version()
+    assert "app.js?v=" in html
+    assert f"app.js?v={version}" in html
+    assert f"styles.css?v={version}" in html
+    # Serve-time injection only: on-disk file untouched (A1).
+    assert before == after, "render_index_html modified index.html on disk"

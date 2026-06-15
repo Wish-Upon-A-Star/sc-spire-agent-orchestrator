@@ -164,6 +164,17 @@ route `chatgpt_pro_manual_strategist`(auto_spawn:false, manual surface) + person
 **A13:** 로컬 `verify.py`(pytest + --smoke) + GitHub Actions `.github/workflows/ci.yml`(_sao-push 루트, push마다 pytest 자동 실행) — GPT가 지적한 "검증이 로컬뿐, CI 없음" 해소.
 
 **검증:** ✅ 나 직접 pytest **22 passed**(+load_unity_target, suggest_unity_surface) / smoke `{"ok":true}` / verify.py exit 0 / 라이브 unity_target·`suggest_targets("전투 UI 봐줘")→Assets/...` / A1 회귀X / zero-dep. CI는 push 시 GitHub Actions에서 자동 실행.
+- ✅ CI 결과: run 27535782542 **completed/success (21s)** — A13 end-to-end 검증, GPT "CI 없음" 완전 해소.
+
+## A6 (atomic write) + A7 (regression test) + B1 (동적 캐시버전) · ✅ 완료·검증
+
+**A6:** `write_json_atomic`(temp 동일디렉토리+flush+fsync+os.replace), `write_json`이 위임 → 모든 caller atomic. per-run lock infra(`run_write_lock`) 제공(call site 소급은 점진).
+**A7:** +regression test(write_json_atomic, reconcile idempotent, lookup_message_effective_run, post_message_created_run_id[live skip-if-no-server], static_asset_version, render_index_injects_version).
+**B1:** `static_asset_version()`(app.js+styles.css sha1 12hex) + `render_index_html()`이 serve-time에 `?v=` 주입(디스크 불변, A1) → **수동 bump 끝**.
+
+**검증 (3중):**
+- ✅ 나 직접: pytest **28**(27 pass+1 live, 서버 있을 때 28 pass) / smoke `{"ok":true}` / A6 os.replace·tmp잔여0 / B1 `app.js?v=bc10d0a0fbbb`(content-hash, 디스크 불변) / A1 회귀X / zero-dep
+- ✅ Codex: A6 **SOUND**(temp 동일dir·collision 방지·cleanup·JSON 계약 보존). B1 problems → 정규식 attribute-anchor 안 됨(`notapp.js?v=` 오매치 가능) → **leading `/`로 anchor 수정**. 비차단(per-request read·missing asset silent)은 단일사용자 규모 수용.
 
 ## 남은 일 (커밋 보류 상태)
 - git 커밋 전부 보류 중 (working tree에 무관 게임 WIP 995개). 사용자가 원하면 `tools/sc_spire_agent_sdk_orchestrator/` + `docs/superpowers/plans/` 만 scoped commit 가능.
