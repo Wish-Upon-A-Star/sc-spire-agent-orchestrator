@@ -202,7 +202,13 @@ GPT가 live repo 코드를 직접 읽고 정확한 후속 5개 지적 → 전부
 5. **unity_target.json 실값**: 실제 sc-spire-unity repo에서 검증 — `unity_version 6000.4.6f1`, scenes Main/CombatPrototype, surfaces, verification_commands(템플릿), known_missing_systems=[]+의도 note.
 
 **검증:** ✅ 나 직접 pytest **39**(38+1 live skip) / smoke `{"ok":true}` / 라이브: A5 5키·reconcile run_id 200·gpt-pro health 독립·issue_regression status에서 제거·unity 실값 / A1 회귀X / zero-dep. Codex 리뷰 진행중(finish-now라 push 후 반영).
-- 🔧 **CI 실측(gh)**: 최근 4 run 전부 **success**(45f63ad=27543774398, UI fix=27544290823 포함). GPT가 "최신 커밋 workflow run 못 봄"이라 한 건 GPT GitHub 커넥터 한계 — 실제 Actions는 매 push 초록불.
+- 🔧 **CI 실측(gh)**: 최근 run 전부 **success**(45f63ad=27543774398, UI fix=27544290823, 후속배치=27545099376 포함). GPT가 "최신 커밋 workflow run 못 봄"이라 한 건 GPT GitHub 커넥터 한계 — 실제 Actions는 매 push 초록불.
+
+## 🔎 GPT 3차(f6f84b9 리뷰, 1커밋 stale) — 진짜 남은 갭 1건 추가 처리
+
+GPT가 `f6f84b9`(UI 패치)를 리뷰 → 5개 후속이 "아직"이라 했으나 그중 4개는 `58a40e0`에서 이미 완료. **유일하게 진짜 남았던 건 GPT #2**: `openai-strategy-advisor-api`가 adapter_health에 없어 프론트가 route config `auto_spawn:true`만 보고 "자동 가능"으로 **과장 표시**(실제 auto는 live토글+키 필요). chatgpt_pro만 pseudo-health 있었고 openai-strategy는 없었음.
+**수정:** build_adapter_health에 `openai-strategy-advisor-api` pseudo-health 추가 — `auto_spawn_available = live_preflight_enabled() and openai_key_present`(정직). LANE_SPECS도 자기 health 키로 연결.
+**검증:** ✅ pytest **39** / smoke ok / 라이브: openai-strategy health 존재, live off라 auto_spawn=False → 배지가 route-config 추측 대신 실제 상태 표시. live+키 켜면 "자동 가능"으로 전환. CI success(27545099376).
 
 ## A6 (atomic write) + A7 (regression test) + B1 (동적 캐시버전) · ✅ 완료·검증
 

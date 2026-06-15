@@ -7263,6 +7263,22 @@ def build_adapter_health(sdk_status: dict[str, object] | None = None) -> dict[st
             "path": "",
             "truth": "ChatGPT Pro 수동 전략 레인 — 운영자가 요청 패킷을 복사해 ChatGPT Pro에 붙여넣고 답변을 다시 붙여넣습니다. 자동 스폰/직접 파일 쓰기는 없습니다.",
         },
+        "openai-strategy-advisor-api": {
+            # Auto small-structured-judgment lane. It only makes a real live call
+            # when live preflight is enabled AND a key is present; otherwise it
+            # degrades to a deterministic local rule (no network). Report the
+            # HONEST auto availability, not the route-config auto_spawn guess.
+            "configured": True,
+            **split_health(
+                manual_surface_available=False,
+                auto_spawn_available=bool(live_preflight_enabled() and openai_key_present),
+                can_write_artifact_directly=True,
+            ),
+            "mode": "openai_responses_api_gated",
+            "path": "",
+            "truth": "openai-strategy-advisor-api는 live preflight 토글 + OPENAI_API_KEY가 있을 때만 실제 호출하고, 없으면 결정론적 local rule로 폴백합니다.",
+            "api_key_present": openai_key_present,
+        },
         "gemini_collaborator": {
             "configured": gemini_enabled,
             **split_health(
@@ -7285,7 +7301,7 @@ def build_adapter_health(sdk_status: dict[str, object] | None = None) -> dict[st
 LANE_SPECS: dict[str, tuple[str, str]] = {
     "codex_subscription_worker": ("codex_subscription_worker", "external_codex_cli"),
     "claude_collaborator": ("claude_collaborator", "live_claude_cli"),
-    "openai-strategy-advisor-api": ("openai_agents_sdk", "live_openai_api"),
+    "openai-strategy-advisor-api": ("openai-strategy-advisor-api", "live_openai_api"),
     "chatgpt_pro_manual_strategist": ("chatgpt_pro_manual_strategist", "external_chatgpt_pro_manual"),
 }
 # Friendly aliases so callers can pass short lane names.
