@@ -3,7 +3,7 @@
   --panel: #ffffff;          /* cards / primary surface */
   --panel-2: #eef1f6;        /* secondary surface (inputs, chips) */
   --panel-3: #e5eaf1;        /* tertiary */
-  --line: #d3dae3;           /* borders */
+  --line: #c7cfdb;           /* borders */
   --line-soft: #e6ebf1;      /* subtle dividers */
   --text: #16202e;           /* near-black primary text (strong contrast) */
   --muted: #4d5765;          /* secondary text — readable on white */
@@ -13,7 +13,24 @@
   --accent-2: #b4690a;       /* amber/warning text on light */
   --danger: #d33a2c;
   --info: #2563eb;
-  --shadow: rgba(15, 23, 42, 0.08);
+  --shadow: rgba(15, 23, 42, 0.10);
+
+  /* Unified high-visibility state palette (FILLED chips, >=4.5:1 text) */
+  --state-success-bg: #dcf3e6;
+  --state-success-fg: #0c6b43;
+  --state-success-bd: #a6dcc1;
+  --state-active-bg: #dbeafe;
+  --state-active-fg: #1d4ed8;
+  --state-active-bd: #aecbf5;
+  --state-warning-bg: #fbe6cf;
+  --state-warning-fg: #985007;
+  --state-warning-bd: #eec288;
+  --state-danger-bg: #fae0dd;
+  --state-danger-fg: #b3271a;
+  --state-danger-bd: #f0b3ac;
+  --state-neutral-bg: #eef1f6;
+  --state-neutral-fg: #5a6573;
+  --state-neutral-bd: var(--line);
 
   /* Typography */
   --font-sans: "Plus Jakarta Sans", "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -3204,3 +3221,185 @@ h2 {
 .gpt-pro-divider { border: none; border-top: 1px solid var(--line); margin: 12px 0 8px; }
 #gpt-pro-answer { width: 100%; margin: 6px 0; }
 #gpt-pro-status { white-space: pre-wrap; }
+
+/* =========================================================================
+   VISIBILITY PASS (2026-06-15)
+   1. Card lift shadows so primary cards stand off the light page
+   2. Unified high-visibility FILLED state chips (read status at a glance)
+   3. Metric tile value emphasis + colored left border by state
+   ========================================================================= */
+
+/* --- 1. Card separation: subtle lift shadow on primary cards --- */
+.current-command-card,
+.ops-metric,
+.milestone-card,
+.provider-card,
+.summary-card,
+.issue-hit,
+.dispatch-preview,
+.discord-message,
+.recent-issues article,
+.knowledge-card,
+.knowledge-hub article,
+.ops-console {
+  box-shadow: 0 1px 2px var(--shadow);
+}
+
+/* --- 2. Unified FILLED state chips (success/active/warning/danger/neutral) --- */
+
+/* success / done / passed / ready / enabled / saved */
+.ops-checks span.passed,
+.ops-validator-lanes span.passed,
+.decision-line > span.ready,
+.current-command-card header em.ready,
+.provider-status.enabled,
+.agent-chip.active,
+.agent-ops-card.active,
+.ops-agent-strip span.active,
+.ops-advisor-grid article.ready,
+.stage-artifacts span.exists,
+.flow-steps span.done,
+.dispatch-route.received,
+.report-pack-verdict.passed,
+.report-evidence-audit.passed,
+.goal-completion-audit.passed,
+.queue-status.planning_ready,
+.queue-status.prepared_not_running,
+.queue-status.sent_to_main,
+.queue-status.closure_ready,
+.queue-status.worker_result_recorded,
+.queue-status.done {
+  background: var(--state-success-bg) !important;
+  color: var(--state-success-fg) !important;
+  border-color: var(--state-success-bd) !important;
+  font-weight: 600;
+}
+
+/* active / running / in-progress */
+.agent-ops-card.available,
+.dispatch-route.available {
+  background: var(--state-active-bg) !important;
+  color: var(--state-active-fg) !important;
+  border-color: var(--state-active-bd) !important;
+  font-weight: 600;
+}
+
+/* warning / needs_retry / blocked / missing / pending-action */
+.ops-checks span.missing,
+.ops-validator-lanes span.missing,
+.decision-line > span.waiting,
+.current-command-card header em.waiting,
+.provider-status.manual,
+.agent-chip.pending,
+.agent-ops-card.pending,
+.ops-agent-strip span.pending,
+.ops-agent-strip span.dispatch_ready,
+.ops-advisor-grid article.waiting,
+.stage-artifacts span.missing,
+.sdk-pattern-list span.warn,
+.dispatch-route.recommended_next,
+.report-context-coverage span.blocked,
+.goal-requirements span.blocked,
+.goal-requirements span.needs_retry,
+.goal-requirements span.missing,
+.queue-status.planning,
+.queue-status.routed,
+.queue-status.waiting_claude_review,
+.queue-status.waiting_browser_e2e,
+.queue-status.waiting_review_and_e2e,
+.queue-status.waiting_validator_lanes {
+  background: var(--state-warning-bg) !important;
+  color: var(--state-warning-fg) !important;
+  border-color: var(--state-warning-bd) !important;
+  font-weight: 600;
+}
+
+/* danger / failed / blocked-dispatch / removed */
+.provider-status.disabled,
+.current-status-badge.dispatch_blocked,
+.agent-ops-card.dispatch_blocked,
+.queue-status.dispatch_blocked,
+.agent-chip.dispatch_blocked,
+.stage-node.blocked,
+.queue-status.blocked,
+.queue-status.removed,
+.live-status.error {
+  background: var(--state-danger-bg) !important;
+  color: var(--state-danger-fg) !important;
+  border-color: var(--state-danger-bd) !important;
+  font-weight: 600;
+}
+
+/* neutral / waiting-idle / pending-idle / disabled */
+.queue-status.legacy_record,
+.queue-status.archived_run {
+  background: var(--state-neutral-bg) !important;
+  color: var(--state-neutral-fg) !important;
+  border-color: var(--state-neutral-bd) !important;
+  font-weight: 600;
+}
+
+.agent-ops-card.disabled {
+  opacity: 0.7;
+}
+
+/* Disabled card keeps its own neutral fill but stays legible */
+.agent-ops-card.disabled:not(.active):not(.pending):not(.available):not(.dispatch_blocked) {
+  background: var(--state-neutral-bg);
+  border-color: var(--state-neutral-bd);
+}
+
+/* Chip ergonomics: pill shape, comfortable padding for inline status spans */
+.ops-checks span.passed,
+.ops-checks span.missing,
+.ops-agent-strip span.active,
+.ops-agent-strip span.pending,
+.ops-agent-strip span.dispatch_ready,
+.agent-chip.active,
+.agent-chip.pending,
+.agent-chip.dispatch_blocked,
+.provider-status.enabled,
+.provider-status.disabled,
+.provider-status.manual {
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+/* The current-command "차단됨/재시도 필요" badge — prominent warning block */
+.current-command-card header em.waiting {
+  font-size: 12px;
+  font-weight: 800;
+}
+
+/* --- 3. Metric tile (ops-metric) emphasis --- */
+.ops-metric {
+  border-left: 3px solid var(--accent);
+}
+
+.ops-metric.ready {
+  border-left-color: var(--state-success-fg);
+}
+
+.ops-metric.waiting {
+  border-left-color: var(--state-warning-fg);
+}
+
+.ops-metric strong {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.ops-metric.ready strong {
+  color: var(--state-success-fg);
+}
+
+.ops-metric.waiting strong {
+  color: var(--state-warning-fg);
+}
+
+.ops-metric span {
+  font-size: var(--fs-eyebrow);
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
