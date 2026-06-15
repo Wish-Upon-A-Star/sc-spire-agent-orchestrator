@@ -1,0 +1,56 @@
+{
+  "contract": "context_capsule",
+  "context_capsule_version": 1,
+  "purpose": "One selected per-run summary every lane reads first, instead of each lane re-reading AGENTS.md / provider_routing.json / issue memory / full transcript. Lanes follow source_refs only when they need more.",
+  "produced_by": "viewer-server reconcile_run_artifacts() -> write_context_capsule() (a MUTATION; never written on the GET /api/run path)",
+  "artifact": "output/agent_orchestrator_runs/<run_id>/context-capsule.json",
+  "fields": {
+    "context_capsule_version": "int — schema version, currently 1",
+    "run_id": "str — owning run id",
+    "task": {
+      "raw": "str — operator_message.original_message (user's original text, never deleted)",
+      "refined": "str — operator_message.refined_message (refined prompt for the main orchestrator)",
+      "mode": "str — light | normal (derived from request_weight; caps issue selection)"
+    },
+    "relevant_policy": "list[str] — short, static-ish hard rules every lane must honor",
+    "relevant_issues": "list[{id, summary, countermeasure}] — top-k from issue memory (matching_issues_for_text); capped at 3 (light) / 8 (normal)",
+    "current_artifacts": "list[{name, status, trust}] — files present in the run dir; trust is provenance.source_type if stamped else 'unknown'",
+    "missing_evidence": "list[str] — expected-but-absent evidence artifacts (e.g. worker-result.json, validator-result.json)",
+    "stamped_at": "str — UTC timestamp (YYYY-MM-DDTHH:MM:SSZ)",
+    "provenance": "object — make_provenance('contract_generated','viewer-server')"
+  },
+  "caps": {
+    "relevant_issues": "<= 3 when mode == 'light', else <= 8"
+  },
+  "trust_values": [
+    "contract_generated",
+    "local_self_check",
+    "external_codex_cli",
+    "live_claude_cli",
+    "live_openai_api",
+    "external_chatgpt_pro_manual",
+    "operator_manual",
+    "unknown"
+  ],
+  "example": {
+    "context_capsule_version": 1,
+    "run_id": "20260615T000000Z-example",
+    "task": {
+      "raw": "테란 카드 밸런스 봐줘",
+      "refined": "data/records/cards_terran.json 검토",
+      "mode": "normal"
+    },
+    "relevant_policy": [
+      "worker result alone cannot close",
+      "player-facing closure requires rendered evidence"
+    ],
+    "relevant_issues": [
+      {"id": "issue-123", "summary": "...", "countermeasure": "..."}
+    ],
+    "current_artifacts": [
+      {"name": "worker-dispatch.json", "status": "exists", "trust": "contract_generated"}
+    ],
+    "missing_evidence": ["worker-result.json", "validator-result.json"],
+    "stamped_at": "2026-06-15T00:00:00Z"
+  }
+}

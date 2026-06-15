@@ -183,3 +183,129 @@ def test_adapter_health_splits_manual_vs_auto():
         ), f"{name} callable is not the derived alias"
         assert adapter["requires_operator_copy_paste"] == (not adapter["auto_spawn_available"])
         assert isinstance(adapter["cli_path"], str)
+
+
+def test_build_context_capsule_shape():
+    # E2: build_context_capsule assembles a single per-run summary. Required
+    # keys must be present, relevant_issues capped by mode, and current_artifacts
+    # trust must reflect each artifact's provenance.source_type.
+    run_id = f"zz-test-capsule-{uuid.uuid4().hex[:12]}"
+    run_dir = viewer_server.RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        # An artifact WITH provenance -> trust should reflect source_type.
+        (run_dir / "worker-dispatch.json").write_text(
+            json.dumps(
+                {
+                    "kind": "worker_dispatch",
+                    "provenance": {"source_type": "contract_generated"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        # An artifact WITHOUT provenance -> trust should be 'unknown'.
+        (run_dir / "evidence-contract.json").write_text(
+            json.dumps({"kind": "evidence_contract"}), encoding="utf-8"
+        )
+
+        capsule = viewer_server.build_context_capsule(run_id, run_dir, mode="normal")
+        for key in (
+            "context_capsule_version",
+            "run_id",
+            "task",
+            "relevant_policy",
+            "relevant_issues",
+            "current_artifacts",
+            "missing_evidence",
+            "stamped_at",
+        ):
+            assert key in capsule, f"capsule missing required key {key}"
+
+        assert capsule["context_capsule_version"] == 1
+        assert capsule["run_id"] == run_id
+        assert capsule["task"]["mode"] == "normal"
+        assert isinstance(capsule["relevant_policy"], list) and capsule["relevant_policy"]
+
+        # current_artifacts trust reflects provenance.
+        trust_by_name = {a["name"]: a["trust"] for a in capsule["current_artifacts"]}
+        assert trust_by_name["worker-dispatch.json"] == "contract_generated"
+        assert trust_by_name["evidence-contract.json"] == "unknown"
+
+        # Expected-but-absent evidence is surfaced.
+        assert "worker-result.json" in capsule["missing_evidence"]
+        assert "validator-result.json" in capsule["missing_evidence"]
+
+        # relevant_issues capped by mode (light <= 3, normal <= 8).
+        light = viewer_server.build_context_capsule(run_id, run_dir, mode="light")
+        assert len(light["relevant_issues"]) <= 3
+        assert len(capsule["relevant_issues"]) <= 8
+
+        # The capsule must NOT include itself in current_artifacts even after it
+        # has been written to disk (write path is the mutation).
+        viewer_server.write_context_capsule(run_id, run_dir, mode="normal")
+        rebuilt = viewer_server.build_context_capsule(run_id, run_dir, mode="normal")
+        names = {a["name"] for a in rebuilt["current_artifacts"]}
+        assert viewer_server.CONTEXT_CAPSULE_ARTIFACT not in names
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_validate_review_output_accepts_good():
+    # E4: a well-formed reviewer output validates.
+    good = {
+        "verdict": "blocked",
+        "top_findings": [
+            {
+                "severity": "high",
+                "claim": "closure not allowed",
+                "because": "worker-result.json missing",
+                "required_evidence": "worker-result.json",
+            }
+        ],
+        "missing_evidence": ["worker-result.json"],
+        "do_not_repeat": [],
+        "next_action": "record worker-result.json",
+    }
+    ok, errors = viewer_server.validate_review_output(good)
+    assert ok, f"expected valid, got errors: {errors}"
+    assert errors == []
+
+    # Minimal valid output (optional lists/next_action omitted).
+    ok2, errors2 = viewer_server.validate_review_output(
+        {"verdict": "pass", "top_findings": []}
+    )
+    assert ok2, errors2
+
+
+def test_validate_review_output_rejects_bad():
+    # E4: bad verdict.
+    ok, errors = viewer_server.validate_review_output(
+        {"verdict": "approve", "top_findings": []}
+    )
+    assert not ok and any("verdict" in e for e in errors)
+
+    # More than 5 findings.
+    too_many = {
+        "verdict": "pass",
+        "top_findings": [
+            {"severity": "low", "claim": "c", "because": "b"} for _ in range(6)
+        ],
+    }
+    ok, errors = viewer_server.validate_review_output(too_many)
+    assert not ok and any("max 5" in e for e in errors)
+
+    # Finding missing required keys + bad severity.
+    bad_finding = {
+        "verdict": "needs_retry",
+        "top_findings": [{"severity": "critical", "claim": "c"}],
+    }
+    ok, errors = viewer_server.validate_review_output(bad_finding)
+    assert not ok
+    assert any("because" in e for e in errors)
+    assert any("severity" in e for e in errors)
+
+    # Non-dict input must not raise and must be rejected.
+    ok, errors = viewer_server.validate_review_output(["not", "a", "dict"])
+    assert not ok and errors
+    ok, errors = viewer_server.validate_review_output(None)
+    assert not ok and errors

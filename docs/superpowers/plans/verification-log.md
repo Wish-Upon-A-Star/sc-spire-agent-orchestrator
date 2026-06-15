@@ -122,6 +122,16 @@ Codex가 진짜 버그 4건 지적:
 
 **검증:** ✅ 나 직접 pytest **12 passed**(+make_provenance/record_result_provenance/adapter_split 3개) / smoke `{"ok":true}`(callable 유지) / 라이브 adapter_health 5키 확인. 저위험 추가형이라 Codex는 다음 큰 항목과 배치.
 
+## E2 (context capsule) + E4 (output schema) · ✅ 완료·검증
+
+**E2:** `build_context_capsule(run_id,run_dir,mode)` — task/relevant_policy/relevant_issues(top-k, light3·normal8)/current_artifacts(provenance.source_type→trust)/missing_evidence 조립. `reconcile_run_artifacts`에서만 `context-capsule.json` write(A1: GET 아님), `run_payload`는 read만. `prompt_contracts/context_capsule_schema.json` 추가.
+**E4:** `prompt_contracts/output_schemas.json` + **stdlib 손수** `validate_review_output(obj)->(ok,errors)`(zero-dep 유지, raise 없음). record_run_result가 validator/claude_review/product_review 결과에 `schema_valid/schema_errors` **주석만**(reject 안 함).
+
+**검증 (3중):**
+- ✅ 나 직접: pytest **15 passed** / smoke `{"ok":true}` / 라이브 GET **새 파일 0**(A1 회귀 없음) / reconcile→capsule 생성·GET read-only 확인 / zero-dep 유지(requirements 불변)
+- ✅ Codex: **SOUND** — run_payload 순수 read 유지, build_context_capsule 전 예외경로 폴백(reconcile try/except 안), validate_review_output 완전 방어적(어떤 입력도 raise 안 함)
+- 비차단 노트(Codex): (MEDIUM) run_dir 없으면 missing_evidence 노이즈 / (LOW) `_artifact_trust`가 reconcile마다 artifact 전부 read·상한 없음 → artifact 폭발 시 A6/B2와 함께 처리. 현 규모(~37개) 무시 가능.
+
 ## 남은 일 (커밋 보류 상태)
 - git 커밋 전부 보류 중 (working tree에 무관 게임 WIP 995개). 사용자가 원하면 `tools/sc_spire_agent_sdk_orchestrator/` + `docs/superpowers/plans/` 만 scoped commit 가능.
 - 변경 파일: viewer_server.py, viewer_static/{app.js,index.html,styles.css}, test_viewer_units.py, smoke_test_viewer.py (+ ~/.codex/config.toml 1줄).

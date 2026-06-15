@@ -241,6 +241,13 @@ def reconcile_run_artifacts(run_id: str, run_dir: Path) -> dict[str, object]:
         "provenance": make_provenance("contract_generated", "viewer-server"),
     }
     reconciled: list[str] = summary["reconciled"]  # type: ignore[assignment]
+    # E2: build/refresh the per-run context capsule on every mutating reconcile.
+    # This is a MUTATION (A1) so it lives here, not on the GET run_payload path.
+    try:
+        write_context_capsule(run_id, run_dir, mode=_run_capsule_mode(run_dir))
+        reconciled.append(CONTEXT_CAPSULE_ARTIFACT)
+    except Exception as exc:  # pragma: no cover - defensive
+        summary["capsule_error"] = str(exc)
     if not (run_dir / "d-drive-report-pack.json").exists():
         summary["skipped"] = True
         return summary
@@ -286,10 +293,18 @@ def run_payload(run_id: str) -> dict[str, object]:
                 except Exception:
                     pass
         plan = enrich_dispatch_preview(plan)
+    capsule_path = run_dir / CONTEXT_CAPSULE_ARTIFACT
+    context_capsule = None
+    if capsule_path.exists():
+        try:
+            context_capsule = read_json_file(capsule_path)
+        except Exception:
+            context_capsule = None
     return {
         "id": run_id,
         "events": read_transcript(run_dir),
         "plan": plan,
+        "context_capsule": context_capsule,
         "chatkit": read_json_file(chatkit_path) if chatkit_path.exists() else None,
         "transcript_md": markdown_path.read_text(encoding="utf-8", errors="replace") if markdown_path.exists() else "",
         "claude_prompt": claude_prompt_path.read_text(encoding="utf-8", errors="replace") if claude_prompt_path.exists() else "",
@@ -423,6 +438,184 @@ def make_provenance(
     if verified_by:
         provenance["verified_by"] = list(verified_by)
     return provenance
+
+
+# E2 context capsule -----------------------------------------------------------
+
+CONTEXT_CAPSULE_ARTIFACT = "context-capsule.json"
+
+# Short, static-ish policy lines every lane should honor (E2). Kept terse so the
+# capsule stays cheap to read.
+CONTEXT_CAPSULE_POLICY = [
+    "worker result alone cannot close",
+    "player-facing closure requires rendered evidence",
+    "every PASS must name the artifact that proves it",
+    "if evidence is missing, verdict must be needs_retry or blocked",
+]
+
+# Artifacts a healthy run is expected to eventually produce. Absence => listed in
+# missing_evidence (E2).
+CONTEXT_CAPSULE_EXPECTED_EVIDENCE = [
+    "worker-result.json",
+    "validator-result.json",
+]
+
+
+def _artifact_trust(run_dir: Path, name: str) -> str:
+    """Read an artifact's provenance.source_type as its trust level (E2/A2)."""
+    path = run_dir / name
+    if not path.exists():
+        return "unknown"
+    try:
+        data = read_json_file(path)
+    except Exception:
+        return "unknown"
+    if isinstance(data, dict):
+        provenance = data.get("provenance")
+        if isinstance(provenance, dict):
+            source_type = provenance.get("source_type")
+            if isinstance(source_type, str) and source_type:
+                return source_type
+    return "unknown"
+
+
+def _run_capsule_mode(run_dir: Path) -> str:
+    """Derive capsule mode (light|normal) from the run's request weight."""
+    plan_path = run_dir / "orchestration-plan.json"
+    if not plan_path.exists():
+        return "normal"
+    try:
+        plan = read_json_file(plan_path)
+    except Exception:
+        return "normal"
+    if not isinstance(plan, dict):
+        return "normal"
+    operator = plan.get("operator_message") if isinstance(plan.get("operator_message"), dict) else {}
+    preflight = operator.get("preflight") if isinstance(operator.get("preflight"), dict) else {}
+    weight = str(preflight.get("request_weight", "")).strip()
+    return "light" if weight == "light" else "normal"
+
+
+def build_context_capsule(run_id: str, run_dir: Path, mode: str = "normal") -> dict[str, object]:
+    """Build a single per-run context capsule every lane can read first (E2).
+
+    Assembled purely from EXISTING run data: the orchestration plan's operator
+    message (raw/refined task), the existing issue-memory selection
+    (``matching_issues_for_text`` top-k), per-artifact provenance trust (A2), and
+    the set of expected-but-absent evidence artifacts.
+    """
+    plan_path = run_dir / "orchestration-plan.json"
+    plan = read_json_file(plan_path) if plan_path.exists() else {}
+    if not isinstance(plan, dict):
+        plan = {}
+    operator = plan.get("operator_message") if isinstance(plan.get("operator_message"), dict) else {}
+    raw = str(operator.get("original_message", ""))
+    refined = str(operator.get("refined_message", ""))
+
+    issue_cap = 3 if mode == "light" else 8
+    issue_query = "\n".join([raw, refined]).strip()
+    relevant_issues: list[dict[str, object]] = []
+    if issue_query:
+        for issue in matching_issues_for_text(issue_query, limit=issue_cap):
+            relevant_issues.append(
+                {
+                    "id": issue.get("id", ""),
+                    "summary": issue.get("title", "") or issue.get("snippet", ""),
+                    "countermeasure": issue.get("snippet", ""),
+                }
+            )
+
+    current_artifacts: list[dict[str, object]] = []
+    if run_dir.exists():
+        for item in sorted(run_dir.iterdir(), key=lambda p: p.name):
+            if not item.is_file():
+                continue
+            if item.name == CONTEXT_CAPSULE_ARTIFACT:
+                continue
+            current_artifacts.append(
+                {
+                    "name": item.name,
+                    "status": "exists",
+                    "trust": _artifact_trust(run_dir, item.name),
+                }
+            )
+
+    present_names = {entry["name"] for entry in current_artifacts}
+    missing_evidence = [name for name in CONTEXT_CAPSULE_EXPECTED_EVIDENCE if name not in present_names]
+
+    return {
+        "context_capsule_version": 1,
+        "run_id": run_id,
+        "task": {"raw": raw, "refined": refined, "mode": mode},
+        "relevant_policy": list(CONTEXT_CAPSULE_POLICY),
+        "relevant_issues": relevant_issues,
+        "current_artifacts": current_artifacts,
+        "missing_evidence": missing_evidence,
+        "stamped_at": utc_timestamp(),
+    }
+
+
+def write_context_capsule(run_id: str, run_dir: Path, mode: str = "normal") -> dict[str, object]:
+    """Build + persist the context capsule as a MUTATION (A1: not on GET path)."""
+    capsule = build_context_capsule(run_id, run_dir, mode=mode)
+    capsule["provenance"] = make_provenance("contract_generated", "viewer-server")
+    write_json(run_dir / CONTEXT_CAPSULE_ARTIFACT, capsule)
+    return capsule
+
+
+# E4 reviewer output schema validator -----------------------------------------
+
+REVIEW_VERDICTS = {"pass", "needs_retry", "blocked"}
+REVIEW_SEVERITIES = {"high", "medium", "low"}
+REVIEW_FINDING_REQUIRED_KEYS = ("severity", "claim", "because")
+
+
+def validate_review_output(obj: object) -> tuple[bool, list[str]]:
+    """Hand-rolled stdlib validator for the shared reviewer output schema (E4).
+
+    Never raises on bad input. Returns ``(ok, errors)`` where ``errors`` is a
+    list of human-readable strings. Validates: dict shape; verdict in the allowed
+    set; top_findings is a list of <= 5 dicts each with required keys and a valid
+    severity; missing_evidence / do_not_repeat are lists; next_action is a str.
+    """
+    errors: list[str] = []
+    if not isinstance(obj, dict):
+        return False, [f"output must be a dict, got {type(obj).__name__}"]
+
+    verdict = obj.get("verdict")
+    if verdict not in REVIEW_VERDICTS:
+        errors.append(
+            f"verdict must be one of {sorted(REVIEW_VERDICTS)}, got {verdict!r}"
+        )
+
+    top_findings = obj.get("top_findings")
+    if not isinstance(top_findings, list):
+        errors.append("top_findings must be a list")
+    else:
+        if len(top_findings) > 5:
+            errors.append(f"top_findings has {len(top_findings)} items (max 5)")
+        for index, finding in enumerate(top_findings):
+            if not isinstance(finding, dict):
+                errors.append(f"top_findings[{index}] must be a dict")
+                continue
+            for key in REVIEW_FINDING_REQUIRED_KEYS:
+                if key not in finding:
+                    errors.append(f"top_findings[{index}] missing key {key!r}")
+            severity = finding.get("severity")
+            if severity is not None and severity not in REVIEW_SEVERITIES:
+                errors.append(
+                    f"top_findings[{index}].severity must be one of "
+                    f"{sorted(REVIEW_SEVERITIES)}, got {severity!r}"
+                )
+
+    for list_key in ("missing_evidence", "do_not_repeat"):
+        if list_key in obj and not isinstance(obj.get(list_key), list):
+            errors.append(f"{list_key} must be a list")
+
+    if "next_action" in obj and not isinstance(obj.get("next_action"), str):
+        errors.append("next_action must be a str")
+
+    return (not errors), errors
 
 
 def summarize_run_context(run_id: str) -> dict[str, object]:
@@ -2593,6 +2786,16 @@ def record_run_result(payload: dict[str, object]) -> dict[str, object]:
             "operator_manual", "operator", is_claim_evidence=True
         ),
     }
+    # E4: annotate reviewer-style results with shared-schema compliance. Do NOT
+    # reject — just record whether the structure validates, so we can observe
+    # adoption over time.
+    if result_type in {"validator", "claude_review", "product_review"}:
+        review_candidate = payload.get("review_output")
+        if not isinstance(review_candidate, dict):
+            review_candidate = result
+        schema_valid, schema_errors = validate_review_output(review_candidate)
+        result["schema_valid"] = schema_valid
+        result["schema_errors"] = schema_errors
     write_json(run_dir / artifact_name, result)
     recipient = "main-orchestrator"
     event_type = "worker_result" if result_type == "worker" else "review_result"

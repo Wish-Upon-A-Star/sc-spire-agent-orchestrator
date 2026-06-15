@@ -1,0 +1,45 @@
+{
+  "contract": "reviewer_output",
+  "purpose": "All reviewers (validator / claude_review / product_review and future lanes) emit the same JSON shape so structure can be enforced without a dependency. Enforced by the hand-rolled stdlib validate_review_output() in viewer_server.py (annotate-only: results are tagged schema_valid / schema_errors, never rejected).",
+  "shape": {
+    "verdict": "pass | needs_retry | blocked",
+    "top_findings": [
+      {
+        "severity": "high | medium | low",
+        "claim": "string — what the reviewer asserts",
+        "because": "string — the reason, naming an artifact/file/command/missing-evidence",
+        "required_evidence": "string (optional) — what evidence would satisfy this finding"
+      }
+    ],
+    "missing_evidence": ["string"],
+    "do_not_repeat": ["string"],
+    "next_action": "string"
+  },
+  "rules": {
+    "verdict": "must be one of pass | needs_retry | blocked",
+    "top_findings": "must be a list with at most 5 items",
+    "top_findings[].required_keys": ["severity", "claim", "because"],
+    "top_findings[].severity": "must be one of high | medium | low",
+    "missing_evidence": "must be a list (when present)",
+    "do_not_repeat": "must be a list (when present)",
+    "next_action": "must be a string (when present)"
+  },
+  "validator": {
+    "function": "validate_review_output(obj) -> (ok: bool, errors: list[str])",
+    "behavior": "stdlib only; never raises; returns (False, [...]) for non-dict or any rule violation"
+  },
+  "example": {
+    "verdict": "blocked",
+    "top_findings": [
+      {
+        "severity": "high",
+        "claim": "closure not allowed",
+        "because": "worker-result.json missing",
+        "required_evidence": "worker-result.json"
+      }
+    ],
+    "missing_evidence": ["worker-result.json"],
+    "do_not_repeat": [],
+    "next_action": "record worker-result.json before requesting closure"
+  }
+}
