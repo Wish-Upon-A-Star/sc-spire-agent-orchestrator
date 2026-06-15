@@ -15,13 +15,27 @@
   <body>
     <div class="shell">
       <aside class="runs-pane">
-        <header class="pane-header">
+        <header class="brand-header">
+          <div class="brand-lockup">
+            <span class="brand-mark" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2 L21 7 V17 L12 22 L3 17 V7 Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" opacity="0.45"/>
+                <path d="M12 6.5 L16.5 9 V14 L12 16.5 L7.5 14 V9 Z" fill="currentColor"/>
+              </svg>
+            </span>
+            <div class="brand-text">
+              <p class="brand-name">SC&nbsp;Spire</p>
+              <p class="brand-tagline">에이전트 오케스트레이션 콘솔</p>
+            </div>
+          </div>
+        </header>
+        <div class="runs-section-head">
           <div>
-            <p class="eyebrow">SC Spire</p>
+            <p class="eyebrow">실행 목록</p>
             <h1 id="runs-heading">에이전트 실행</h1>
           </div>
-          <button id="refresh-runs" type="button">새로고침</button>
-        </header>
+          <button id="refresh-runs" class="btn btn-ghost btn-sm" type="button">새로고침</button>
+        </div>
         <div id="runs" class="runs-list"></div>
       </aside>
 
@@ -108,7 +122,7 @@
             <input id="message-thread" type="text" placeholder="선택 사항" />
           </label>
           <textarea id="message-text" rows="5" placeholder="메인 오케스트레이터에게 보낼 메시지"></textarea>
-          <button id="send-message" type="button">사전 검증 후 큐에 넣기</button>
+          <button id="send-message" class="btn btn-primary btn-block" type="button">사전 검증 후 큐에 넣기</button>
           <p id="message-status" class="message-status"></p>
           <section id="prompt-preview" class="prompt-preview" hidden></section>
           </details>
@@ -161,16 +175,16 @@
             <textarea id="result-summary" rows="4" placeholder="결과 요약"></textarea>
             <textarea id="result-evidence" rows="3" placeholder="증거/명령/파일을 줄 단위로 입력"></textarea>
             <textarea id="result-risks" rows="3" placeholder="남은 리스크를 줄 단위로 입력"></textarea>
-            <button id="advance-run" type="button">선택 실행 다음 단계 진행</button>
-            <button id="run-claude-review" type="button">Claude 검토 실행</button>
-            <button id="record-e2e" type="button">화면 E2E 검증 기록</button>
-            <button id="submit-result" type="button">결과 기록</button>
+            <button id="advance-run" class="btn btn-secondary btn-block" type="button">선택 실행 다음 단계 진행</button>
+            <button id="run-claude-review" class="btn btn-secondary btn-block" type="button">Claude 검토 실행</button>
+            <button id="record-e2e" class="btn btn-secondary btn-block" type="button">화면 E2E 검증 기록</button>
+            <button id="submit-result" class="btn btn-primary btn-block" type="button">결과 기록</button>
             <p id="result-status-message" class="message-status"></p>
             <hr class="gpt-pro-divider" />
             <p class="eyebrow">GPT Pro 수동 전략 검토 (L2)</p>
-            <button id="gpt-pro-request" type="button">GPT Pro 검토 패킷 만들기</button>
+            <button id="gpt-pro-request" class="btn btn-secondary btn-block" type="button">GPT Pro 검토 패킷 만들기</button>
             <textarea id="gpt-pro-answer" rows="5" placeholder="ChatGPT Pro 응답(JSON)을 여기에 붙여넣으세요"></textarea>
-            <button id="gpt-pro-result" type="button">GPT Pro 답변 붙여넣기</button>
+            <button id="gpt-pro-result" class="btn btn-secondary btn-block" type="button">GPT Pro 답변 붙여넣기</button>
             <p id="gpt-pro-status" class="message-status"></p>
           </details>
         </section>
