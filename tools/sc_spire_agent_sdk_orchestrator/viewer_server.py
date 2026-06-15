@@ -54,6 +54,14 @@ SUPERVISOR_AUTO_REVIEW_ENABLED = os.environ.get("SC_SPIRE_SUPERVISOR_AUTO_REVIEW
 SUPERVISOR_AUTO_LIVE_CLAUDE = os.environ.get("SC_SPIRE_SUPERVISOR_AUTO_LIVE_CLAUDE", "0") == "1"
 CLAUDE_REVIEW_TIMEOUT = int(os.environ.get("SC_SPIRE_CLAUDE_REVIEW_TIMEOUT", "900"))
 EVENT_LOCK = threading.Lock()
+# A10: dedicated lock for the budget ledger append (append-safe, EVENT_LOCK-style).
+BUDGET_LEDGER_LOCK = threading.Lock()
+BUDGET_LEDGER_PATH = RUNS_DIR / "budget-ledger.jsonl"
+# B2: cap concurrent /api/events SSE connections (each holds a ThreadingHTTPServer
+# thread in a long-lived while-loop). Defaults to 16; override via SC_SPIRE_SSE_MAX.
+SSE_CONNECTIONS = {"n": 0}
+SSE_CONNECTIONS_LOCK = threading.Lock()
+SSE_MAX_CONNECTIONS = int(os.environ.get("SC_SPIRE_SSE_MAX", "16"))
 STATUS_EPOCH = {"seq": 0}
 STATUS_EPOCH_LOCK = threading.Lock()
 ISSUE_IMPORT_CACHE: dict[str, object] = {"mtime": None, "payload": None}
@@ -308,9 +316,12 @@ def run_payload(run_id: str) -> dict[str, object]:
         review_matrix = build_review_matrix(run_id, run_dir, mode=_run_capsule_mode(run_dir))
     except Exception:
         review_matrix = []
+    transcript_events = read_transcript(run_dir)
     return {
         "id": run_id,
-        "events": read_transcript(run_dir),
+        "events": transcript_events,
+        # A11: pure-read v2 normalization of the transcript (does not rewrite disk).
+        "trace_v2": [to_trace_event_v2(e) for e in transcript_events if isinstance(e, dict)],
         "plan": plan,
         "context_capsule": context_capsule,
         "review_matrix": review_matrix,
@@ -2047,6 +2058,18 @@ def call_prompt_preflight_model(text: str, target: str, run_context: dict[str, o
     refined_prompt = str(model_json.get("refined_prompt", "")).strip()
     if not refined_prompt:
         raise RuntimeError("Model preflight returned no refined_prompt")
+    # A10: record the LIVE OpenAI Responses API call in the budget ledger.
+    with contextlib.suppress(Exception):
+        append_budget_ledger(
+            run_id=str(run_context.get("run_id", "")) if isinstance(run_context, dict) else "",
+            provider="openai",
+            model=model,
+            purpose="prompt_preflight",
+            budget_gate="passed",
+            est_input_tokens=len(text),
+            est_output_tokens=len(refined_prompt),
+            reason=f"live /v1/responses preflight for target={target}",
+        )
     return {
         "status": "model_refined_for_main_orchestrator",
         "mode": "openai_responses_api",
@@ -2083,6 +2106,16 @@ def preflight_operator_prompt(text: str, target: str, run_id: str) -> tuple[str,
             "HTML operator submit must be immediately inspectable. "
             "Set SC_SPIRE_LIVE_PROMPT_PREFLIGHT=1 to run live OpenAI preflight in this request path."
         )
+        # A10: log the deferred (no live API spend) decision.
+        with contextlib.suppress(Exception):
+            append_budget_ledger(
+                run_id=run_id,
+                provider="openai",
+                model=prompt_preflight_model(),
+                purpose="prompt_preflight",
+                budget_gate="deferred",
+                reason="live preflight disabled; rule-based fallback used (no API spend)",
+            )
         return fallback_prompt, fallback_validation
     try:
         model_validation = call_prompt_preflight_model(text, target, run_context)
@@ -2124,6 +2157,52 @@ def append_operator_event(
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
     invalidate_status_cache()
     return event
+
+
+def append_budget_ledger(
+    run_id: str,
+    provider: str,
+    model: str,
+    purpose: str,
+    budget_gate: str,
+    est_input_tokens: int | None = None,
+    est_output_tokens: int | None = None,
+    reason: str = "",
+) -> dict[str, object]:
+    """A10: append one JSON line to budget-ledger.jsonl (append-safe under a
+    dedicated lock, mirroring append_operator_event)."""
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "timestamp": utc_timestamp(),
+        "run_id": run_id,
+        "provider": provider,
+        "model": model,
+        "purpose": purpose,
+        "budget_gate": budget_gate,
+        "est_input_tokens": est_input_tokens,
+        "est_output_tokens": est_output_tokens,
+        "reason": reason,
+    }
+    with BUDGET_LEDGER_LOCK:
+        with BUDGET_LEDGER_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    return entry
+
+
+def read_budget_ledger(limit: int = 50) -> list[dict[str, object]]:
+    """A10: read back the last N ledger lines (read-only; safe on GET)."""
+    if not BUDGET_LEDGER_PATH.exists():
+        return []
+    rows: list[dict[str, object]] = []
+    for line in BUDGET_LEDGER_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.strip():
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                rows.append(obj)
+    return rows[-limit:]
 
 
 def read_operator_events(limit: int = 500) -> list[dict[str, object]]:
@@ -3295,12 +3374,39 @@ def apply_report_pack_judgment_to_gate(run_dir: Path, judgment: dict[str, object
     write_json(gate_path, gate)
 
 
+def to_trace_event_v2(event: dict[str, object]) -> dict[str, object]:
+    """A11: compatibility shim mapping a legacy transcript event
+    (speaker/recipient/event_type/message/artifact) onto the manifest-expected
+    v2 shape (actor/target/type/status). Does NOT rewrite stored events."""
+    if not isinstance(event, dict):
+        event = {}
+    return {
+        "schema_version": 2,
+        "timestamp": event.get("timestamp", ""),
+        "actor": event.get("speaker", ""),
+        "target": event.get("recipient", ""),
+        "type": event.get("event_type", ""),
+        "status": event.get("status", ""),
+        "message": event.get("message", ""),
+        "artifact": event.get("artifact", ""),
+        "run_id": event.get("run_id", ""),
+    }
+
+
 def append_transcript_event(run_dir: Path, speaker: str, recipient: str, event_type: str, message: str, artifact: str = "") -> None:
+    # A11: stamp new events with schema_version 2 and include BOTH the legacy keys
+    # (speaker/recipient/event_type) and the v2 keys (actor/target/type) so old
+    # and new readers both work (additive, backward-compatible).
     event = {
+        "schema_version": 2,
         "timestamp": utc_timestamp(),
         "speaker": speaker,
         "recipient": recipient,
         "event_type": event_type,
+        "actor": speaker,
+        "target": recipient,
+        "type": event_type,
+        "status": "",
         "message": message,
         "artifact": artifact,
     }
@@ -6865,14 +6971,34 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 debug_log(f"GET /api/status sent elapsed={time.time() - started:.3f}")
                 return
             if parsed.path == "/api/events":
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "keep-alive")
-                self.end_headers()
+                # B2: atomically claim a connection slot; reject over the cap with
+                # a short 503 BEFORE entering the long-lived loop.
+                with SSE_CONNECTIONS_LOCK:
+                    if SSE_CONNECTIONS["n"] >= SSE_MAX_CONNECTIONS:
+                        admitted = False
+                    else:
+                        SSE_CONNECTIONS["n"] += 1
+                        admitted = True
+                if not admitted:
+                    body = b"too many event streams"
+                    self.send_response(503)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Retry-After", "5")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    with contextlib.suppress(OSError):
+                        self.wfile.write(body)
+                    return
                 last = -1
                 idle = 0
                 try:
+                    # Inside the try so the finally always releases the slot even if
+                    # sending headers raises (client disconnect mid-handshake) — B2.
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("Connection", "keep-alive")
+                    self.end_headers()
                     while True:
                         with STATUS_EPOCH_LOCK:
                             seq = STATUS_EPOCH["seq"]
@@ -6890,6 +7016,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
                         time.sleep(1)
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
                     pass
+                finally:
+                    # B2: always release the connection slot on disconnect/exception.
+                    with SSE_CONNECTIONS_LOCK:
+                        SSE_CONNECTIONS["n"] = max(0, SSE_CONNECTIONS["n"] - 1)
                 return
             if parsed.path == "/api/work-items":
                 work_items = build_work_items(limit=120)
@@ -6897,6 +7027,16 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/provider-routing":
                 self._send_json(load_provider_routing_config())
+                return
+            if parsed.path == "/api/budget-ledger":
+                # A10: read-only exposure of the recent budget ledger (A1: GET
+                # never writes — read_budget_ledger only reads the file).
+                limit_raw = parse_qs(parsed.query).get("limit", ["50"])[0]
+                try:
+                    limit = max(1, min(500, int(limit_raw)))
+                except (TypeError, ValueError):
+                    limit = 50
+                self._send_json({"budget_ledger": read_budget_ledger(limit=limit)})
                 return
             static_path = (STATIC_DIR / parsed.path.lstrip("/")).resolve()
             if STATIC_DIR.resolve() in static_path.parents and static_path.exists() and static_path.is_file():

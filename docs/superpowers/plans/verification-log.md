@@ -166,6 +166,14 @@ route `chatgpt_pro_manual_strategist`(auto_spawn:false, manual surface) + person
 **검증:** ✅ 나 직접 pytest **22 passed**(+load_unity_target, suggest_unity_surface) / smoke `{"ok":true}` / verify.py exit 0 / 라이브 unity_target·`suggest_targets("전투 UI 봐줘")→Assets/...` / A1 회귀X / zero-dep. CI는 push 시 GitHub Actions에서 자동 실행.
 - ✅ CI 결과: run 27535782542 **completed/success (21s)** — A13 end-to-end 검증, GPT "CI 없음" 완전 해소.
 
+## B2 (SSE 상한) + A10 (budget-ledger) + A11 (trace_event_v2) · ✅ 완료·검증
+
+**B2:** `/api/events` 동시연결 카운터+`SSE_MAX_CONNECTIONS`(16, env), 초과 503+Retry-After, finally로 슬롯 해제. **A10:** `append_budget_ledger`/`read_budget_ledger`+`GET /api/budget-ledger`, 라이브 OpenAI preflight·deferred 시 기록(suppress 가드). **A11:** `to_trace_event_v2` shim, append_transcript_event가 schema_version2+actor/target/type를 legacy와 함께(additive), run_payload에 trace_v2 노출.
+
+**검증 (3중):**
+- ✅ 나 직접: pytest **31 passed** / smoke `{"ok":true}` / ledger 엔드포인트 200 / A1 회귀X / zero-dep
+- ✅ Codex: problems 2건 → #1 **B2 슬롯 누수**(send_response가 claim과 try 사이 → 헤더전송 예외 시 슬롯 영구누수) → **send_response를 try 안으로 이동**(finally 항상 해제). #2 read_budget_ledger 비-dict 행 통과 → **isinstance(dict) 필터**. 둘 다 수정. 나머지(503 클린·슬롯 atomic·trace 키 안전·read-only)는 sound.
+
 ## A6 (atomic write) + A7 (regression test) + B1 (동적 캐시버전) · ✅ 완료·검증
 
 **A6:** `write_json_atomic`(temp 동일디렉토리+flush+fsync+os.replace), `write_json`이 위임 → 모든 caller atomic. per-run lock infra(`run_write_lock`) 제공(call site 소급은 점진).

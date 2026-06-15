@@ -655,6 +655,85 @@ def test_static_asset_version_changes():
     assert viewer_server.static_asset_version() == version
 
 
+def test_sse_cap_constant():
+    # B2: the SSE connection cap must be a positive int and the live counter
+    # must start at zero (no leaked slots at import time).
+    assert isinstance(viewer_server.SSE_MAX_CONNECTIONS, int)
+    assert viewer_server.SSE_MAX_CONNECTIONS > 0
+    assert viewer_server.SSE_CONNECTIONS["n"] == 0
+
+
+def test_append_and_read_budget_ledger(monkeypatch, tmp_path):
+    # A10: append a couple of entries via the helper, read them back, and assert
+    # the fields are present and the order is preserved.
+    ledger_path = tmp_path / "budget-ledger.jsonl"
+    monkeypatch.setattr(viewer_server, "BUDGET_LEDGER_PATH", ledger_path)
+
+    first = viewer_server.append_budget_ledger(
+        run_id="run-A",
+        provider="openai",
+        model="gpt-5.5",
+        purpose="prompt_preflight",
+        budget_gate="deferred",
+        reason="first entry",
+    )
+    second = viewer_server.append_budget_ledger(
+        run_id="run-B",
+        provider="openai",
+        model="gpt-5.5",
+        purpose="prompt_preflight",
+        budget_gate="passed",
+        est_input_tokens=120,
+        est_output_tokens=80,
+        reason="second entry",
+    )
+
+    for entry in (first, second):
+        for key in (
+            "timestamp",
+            "run_id",
+            "provider",
+            "model",
+            "purpose",
+            "budget_gate",
+            "est_input_tokens",
+            "est_output_tokens",
+            "reason",
+        ):
+            assert key in entry, f"ledger entry missing key {key}"
+
+    rows = viewer_server.read_budget_ledger(limit=50)
+    assert len(rows) == 2
+    # Order preserved: first appended is first read.
+    assert rows[0]["run_id"] == "run-A"
+    assert rows[1]["run_id"] == "run-B"
+    assert rows[1]["budget_gate"] == "passed"
+    assert rows[1]["est_input_tokens"] == 120
+
+
+def test_trace_event_v2_shape():
+    # A11: a legacy transcript event must map onto the v2 shape with the right
+    # field aliases and schema_version 2.
+    legacy = {
+        "timestamp": "2026-06-15T00:00:00Z",
+        "speaker": "main-orchestrator",
+        "recipient": "codex-worker",
+        "event_type": "dispatch",
+        "message": "go",
+        "artifact": "worker-dispatch.json",
+    }
+    v2 = viewer_server.to_trace_event_v2(legacy)
+    assert v2["schema_version"] == 2
+    assert v2["actor"] == legacy["speaker"]
+    assert v2["target"] == legacy["recipient"]
+    assert v2["type"] == legacy["event_type"]
+    assert v2["message"] == legacy["message"]
+    assert v2["artifact"] == legacy["artifact"]
+    # status derives to "" when absent; non-dict input must not raise.
+    assert v2["status"] == ""
+    assert viewer_server.to_trace_event_v2(None)["schema_version"] == 2
+
+
 def test_render_index_injects_version():
     # B1: the served "/" HTML must contain app.js?v=<version> with the computed
     # token, and serving must NOT modify index.html on disk.
