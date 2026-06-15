@@ -192,6 +192,18 @@ route `chatgpt_pro_manual_strategist`(auto_spawn:false, manual surface) + person
 **검증:** ✅ 브라우저 시각 확인 — Pro 배지 "수동 전용", 커맨드 띠 채워짐, B1 동적버전 자동 반영(`c6cdcc995056`, 서버 재시작·수동 bump 0). frontend-only(app.js) 변경이라 pytest 35 불변.
 **교훈:** 백엔드 테스트 green ≠ UI OK. UI surface 추가 시 브라우저 시각 QA 필수.
 
+## 🔁 GPT 2차 코드검증(실제 GitHub) 후속 5건 · ✅ 적용·검증
+
+GPT가 live repo 코드를 직접 읽고 정확한 후속 5개 지적 → 전부 반영:
+1. **A5 계약 완성**: POST /api/messages 응답에 `latest_event`+`created_artifacts`+`queue_routing_decision` 추가(기존 created_run_id/effective_status에 더해). 테스트로 5키 잠금.
+2. **reconcile id||run_id**: /api/run/reconcile·gpt-pro-request·gpt-pro-result가 `id or run_id` 둘 다 수용.
+3. **GPT-Pro 독립 health**: build_adapter_health에 `chatgpt_pro_manual_strategist` pseudo-adapter(manual True/auto False) 신설, LANE_SPECS를 claude_collaborator에서 분리.
+4. **issue_regression status 핫패스 제거**: 대형 markdown scan을 /api/status에서 빼고 `GET /api/issue-evals` on-demand만 유지.
+5. **unity_target.json 실값**: 실제 sc-spire-unity repo에서 검증 — `unity_version 6000.4.6f1`, scenes Main/CombatPrototype, surfaces, verification_commands(템플릿), known_missing_systems=[]+의도 note.
+
+**검증:** ✅ 나 직접 pytest **39**(38+1 live skip) / smoke `{"ok":true}` / 라이브: A5 5키·reconcile run_id 200·gpt-pro health 독립·issue_regression status에서 제거·unity 실값 / A1 회귀X / zero-dep. Codex 리뷰 진행중(finish-now라 push 후 반영).
+- 🔧 **CI 실측(gh)**: 최근 4 run 전부 **success**(45f63ad=27543774398, UI fix=27544290823 포함). GPT가 "최신 커밋 workflow run 못 봄"이라 한 건 GPT GitHub 커넥터 한계 — 실제 Actions는 매 push 초록불.
+
 ## A6 (atomic write) + A7 (regression test) + B1 (동적 캐시버전) · ✅ 완료·검증
 
 **A6:** `write_json_atomic`(temp 동일디렉토리+flush+fsync+os.replace), `write_json`이 위임 → 모든 caller atomic. per-run lock infra(`run_write_lock`) 제공(call site 소급은 점진).

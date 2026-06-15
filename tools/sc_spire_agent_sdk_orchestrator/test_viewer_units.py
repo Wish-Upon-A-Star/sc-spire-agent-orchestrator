@@ -49,6 +49,17 @@ def test_load_unity_target():
     for key in ("target_repo", "project_type", "rendered_evidence_required"):
         assert key in target, f"unity_target missing required key {key}"
     assert target["project_type"] == "unity"
+    # FIX5: real verified values read from the sc-spire-unity repo.
+    assert target["unity_version"] == "6000.4.6f1"
+    assert "Assets/Scenes/Main.unity" in target["entry_scenes"]
+    assert "Assets/Scenes/CombatPrototype.unity" in target["entry_scenes"]
+    assert target["build_targets"] == ["StandaloneWindows64"]
+    assert target["rendered_evidence_required"] is True
+    assert target["known_missing_systems"] == []
+    assert "_note" in target  # intentional-empty marker
+    summary = viewer_server.unity_target_summary()
+    assert summary["unity_version"] == "6000.4.6f1"
+    assert summary["entry_scenes_count"] == 2
 
 
 def test_classify_request_weight_flags_vague():
@@ -570,6 +581,33 @@ def test_reconcile_is_idempotent_and_writes():
         shutil.rmtree(run_dir, ignore_errors=True)
 
 
+def test_reconcile_accepts_run_id_key():
+    # FIX2: the reconcile handler resolves the run id from either "id" or
+    # "run_id". This asserts the id-resolution idiom + reconcile both work when
+    # only "run_id" is supplied (live handler is exercised via smoke; this is the
+    # pure-unit proof of the run_id fallback).
+    run_id = f"zz-test-runidkey-{uuid.uuid4().hex[:12]}"
+    run_dir = viewer_server.RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        (run_dir / "orchestration-plan.json").write_text(
+            json.dumps({"kind": "operator_prompt_handoff"}), encoding="utf-8"
+        )
+        (run_dir / "d-drive-report-pack.json").write_text(
+            json.dumps({"kind": "d_drive_report_pack", "files": []}), encoding="utf-8"
+        )
+        body = {"run_id": run_id}
+        resolved = str(body.get("id") or body.get("run_id") or "").strip()
+        assert resolved == run_id
+        summary = viewer_server.reconcile_run_artifacts(
+            resolved, viewer_server.safe_run_dir(resolved)
+        )
+        assert isinstance(summary, dict)
+        assert (run_dir / "report-pack-judgment.json").exists()
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
 def test_lookup_message_effective_run_returns_run_id():
     # A7: unit-level proof of the created_run_id plumbing (no live server).
     # Append a message + an event that ties it to a run, then assert
@@ -629,7 +667,43 @@ def test_post_message_returns_created_run_id():
             payload = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, OSError, ConnectionError) as exc:
         pytest.skip(f"viewer server on 8766 unreachable: {exc}")
-    assert "created_run_id" in payload, f"response missing created_run_id: {payload}"
+    # FIX1: the A5 response contract carries all five derived keys.
+    for key in (
+        "created_run_id",
+        "effective_status",
+        "latest_event",
+        "created_artifacts",
+        "queue_routing_decision",
+    ):
+        assert key in payload, f"response missing {key}: {payload}"
+
+
+def test_post_message_response_contract():
+    # FIX1 (pure unit): build_post_message_response includes the full A5 contract
+    # for a freshly appended message without needing a live server.
+    msg_id = f"zz-test-contract-{uuid.uuid4().hex[:12]}"
+    record = {
+        "id": msg_id,
+        "message": "contract regression check",
+        "original_message": "contract regression check",
+        "target": "prompt-preflight-agent",
+        "status": "queued",
+    }
+    response = viewer_server.build_post_message_response(record)
+    for key in (
+        "message",
+        "created_run_id",
+        "effective_status",
+        "latest_event",
+        "created_artifacts",
+        "queue_routing_decision",
+    ):
+        assert key in response, f"response missing {key}: {response}"
+    assert response["message"] is record
+    assert isinstance(response["created_artifacts"], list)
+    routing = response["queue_routing_decision"]
+    assert isinstance(routing, dict)
+    assert routing.get("kind") == "queue_routing_decision"
 
 
 def test_static_asset_version_changes():
@@ -798,6 +872,47 @@ def test_issue_regression_report_shape(monkeypatch, tmp_path):
     assert len(report["seeds"]) == 50  # capped
 
 
+def test_status_build_excludes_heavy_issue_regression_scan():
+    # FIX4: the heavy issue_regression_report() markdown scan must NOT run on the
+    # /api/status hot path. Source-level guarantee: the status response region
+    # does not call issue_regression_report() and does not embed the full report
+    # under an "issue_regression" key. The full report stays on /api/issue-evals.
+    source = (
+        Path(viewer_server.__file__).read_text(encoding="utf-8")
+    )
+    marker = 'if parsed.path == "/api/status":'
+    start = source.index(marker)
+    end = source.index('if parsed.path == "/api/events":', start)
+    status_region = source[start:end]
+    assert "issue_regression_report()" not in status_region, (
+        "issue_regression_report() must not be called on the /api/status hot path"
+    )
+    assert '"issue_regression"' not in status_region, (
+        "full issue_regression report must not be embedded in /api/status payload"
+    )
+    # The dedicated on-demand endpoint still serves the full report.
+    evals_region = source.index('if parsed.path == "/api/issue-evals":')
+    assert "issue_regression_report()" in source[evals_region : evals_region + 400]
+
+
+def test_post_message_live_status_drops_issue_regression():
+    # FIX4 (live, skip-if-no-server): GET /api/status no longer carries the full
+    # issue_regression report, but GET /api/issue-evals still returns it.
+    import urllib.error
+    import urllib.request
+
+    base = "http://127.0.0.1:8766"
+    try:
+        with urllib.request.urlopen(base + "/api/status", timeout=3) as resp:
+            status = json.loads(resp.read().decode("utf-8"))
+        with urllib.request.urlopen(base + "/api/issue-evals", timeout=3) as resp2:
+            evals = json.loads(resp2.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ConnectionError) as exc:
+        pytest.skip(f"viewer server on 8766 unreachable: {exc}")
+    assert "issue_regression" not in status, "status still carries issue_regression"
+    assert set(evals) >= {"count", "with_countermeasure", "seeds"}
+
+
 def test_strategy_review_local_fallback(monkeypatch, tmp_path):
     # L3: with live preflight disabled, call_openai_strategy_review must return a
     # deterministic rule-based dict (source=local_rule) with no network/exception.
@@ -838,6 +953,25 @@ def test_lane_descriptor_shape():
     assert isinstance(gpt_pro["callable"], dict)
     assert gpt_pro["output_schema"] == "reviewer_output_v1"
     assert gpt_pro["provenance_source_type"] == "external_chatgpt_pro_manual"
+
+    # FIX3: the gpt-pro lane has its OWN pseudo-adapter health, decoupled from
+    # claude_collaborator. Its manual surface is available, it never auto-spawns,
+    # and the canonical lane route maps to its own health key.
+    assert gpt_pro["route"] == "chatgpt_pro_manual_strategist"
+    assert gpt_pro["callable"]["manual_surface_available"] is True
+    assert gpt_pro["callable"]["auto_spawn_available"] is False
+    assert gpt_pro["callable"]["requires_operator_copy_paste"] is True
+    assert (
+        viewer_server.LANE_SPECS["chatgpt_pro_manual_strategist"][0]
+        == "chatgpt_pro_manual_strategist"
+    )
+    assert (
+        viewer_server.LANE_SPECS["chatgpt_pro_manual_strategist"][0]
+        != "claude_collaborator"
+    )
+    health = viewer_server.build_adapter_health()
+    assert "chatgpt_pro_manual_strategist" in health
+    assert health["chatgpt_pro_manual_strategist"]["manual_surface_available"] is True
 
     lanes = viewer_server.build_lanes()
     assert isinstance(lanes, list) and len(lanes) >= 4

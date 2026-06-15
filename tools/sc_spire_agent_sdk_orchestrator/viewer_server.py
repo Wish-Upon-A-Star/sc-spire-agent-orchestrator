@@ -734,10 +734,24 @@ UNITY_TARGET_FALLBACK: dict[str, object] = {
     "target_repo": "sc-spire-unity",
     "project_type": "unity",
     "root_path": "D:/hobby/sc-spire-unity",
-    "unity_version": "",
-    "entry_scenes": [],
-    "build_targets": ["Windows"],
-    "verification_commands": [],
+    "unity_version": "6000.4.6f1",
+    "entry_scenes": [
+        "Assets/Scenes/Main.unity",
+        "Assets/Scenes/CombatPrototype.unity",
+    ],
+    "build_targets": ["StandaloneWindows64"],
+    "surfaces": [
+        "Assets/Scripts",
+        "Assets/UI",
+        "Assets/UI Toolkit",
+        "Assets/Editor",
+        "Assets/Scenes",
+        "Assets/StreamingAssets",
+    ],
+    "verification_commands": [
+        "Unity -batchmode -quit -projectPath . -runTests -testPlatform EditMode",
+        "Unity -batchmode -quit -projectPath . -buildTarget Win64 -executeMethod BuildScript.Build",
+    ],
     "rendered_evidence_required": True,
     "parity_sources": [
         "original sc-spire mechanics",
@@ -745,6 +759,7 @@ UNITY_TARGET_FALLBACK: dict[str, object] = {
         "original UI/flow",
     ],
     "known_missing_systems": [],
+    "_note": "known_missing_systems to be populated from original sc-spire parity analysis",
 }
 
 
@@ -1096,7 +1111,7 @@ def build_gpt_pro_result_record(
 
 
 def build_gpt_pro_request(payload: dict[str, object]) -> dict[str, object]:
-    run_id = str(payload.get("id", "")).strip()
+    run_id = str(payload.get("id") or payload.get("run_id") or "").strip()
     if not run_id:
         raise ValueError("id is required")
     run_dir = safe_run_dir(run_id)
@@ -1146,7 +1161,7 @@ def build_gpt_pro_request(payload: dict[str, object]) -> dict[str, object]:
 
 
 def record_gpt_pro_result(payload: dict[str, object]) -> dict[str, object]:
-    run_id = str(payload.get("id", "")).strip()
+    run_id = str(payload.get("id") or payload.get("run_id") or "").strip()
     if not run_id:
         raise ValueError("id is required")
     run_dir = safe_run_dir(run_id)
@@ -2660,6 +2675,41 @@ def lookup_message_effective_run(message_id: str, message: dict[str, object] | N
     effective_run_id = str(latest.get("run_id") or base.get("run_id", "") or "")
     effective_status = workflow_status(events, str(base.get("status", "queued"))) if events else ""
     return {"created_run_id": effective_run_id, "effective_status": effective_status}
+
+
+def build_post_message_response(record: dict[str, object]) -> dict[str, object]:
+    """Build the full A5 response contract for POST /api/messages.
+
+    Returns ``{message, created_run_id, effective_status, latest_event,
+    created_artifacts, queue_routing_decision}``. Pure (no I/O of its own beyond
+    the existing read-only helpers) so it can be unit-tested without a server.
+    ``latest_event`` is the message's latest operator event ("" if none);
+    ``created_artifacts`` lists files in the created run_dir (else []);
+    ``queue_routing_decision`` reuses queue_routing_decision_for_message().
+    """
+    message_id = str(record.get("id", ""))
+    resolved = lookup_message_effective_run(message_id, record)
+    created_run_id = str(resolved.get("created_run_id", "") or "")
+    events = events_by_message_id().get(message_id, [])
+    latest_event = events[-1] if events else ""
+    created_artifacts: list[str] = []
+    if created_run_id:
+        try:
+            run_dir = safe_run_dir(created_run_id)
+            if run_dir.is_dir():
+                created_artifacts = sorted(
+                    p.name for p in run_dir.iterdir() if p.is_file()
+                )
+        except (ValueError, OSError):
+            created_artifacts = []
+    return {
+        "message": record,
+        "created_run_id": created_run_id,
+        "effective_status": str(resolved.get("effective_status", "") or ""),
+        "latest_event": latest_event,
+        "created_artifacts": created_artifacts,
+        "queue_routing_decision": queue_routing_decision_for_message(record),
+    }
 
 
 def title_for_message(message: dict[str, object], max_chars: int = 42) -> str:
@@ -7196,6 +7246,23 @@ def build_adapter_health(sdk_status: dict[str, object] | None = None) -> dict[st
             "import_error": str(sdk_status.get("import_error") or ""),
             "installed": bool(sdk_status.get("installed")),
         },
+        "chatgpt_pro_manual_strategist": {
+            # GPT-Pro is a human-gated manual lane: the operator copy-pastes the
+            # request packet into ChatGPT Pro and pastes the answer back. It has a
+            # manual surface but never auto-spawns and never writes artifacts on
+            # its own. Decoupled from claude_collaborator so Claude CLI presence
+            # does not misreport this lane.
+            "configured": True,
+            "manual_surface_available": True,
+            "auto_spawn_available": False,
+            "cli_path": "",
+            "requires_operator_copy_paste": True,
+            "can_write_artifact_directly": False,
+            "callable": True,
+            "mode": "external_chatgpt_pro_manual_copy_paste",
+            "path": "",
+            "truth": "ChatGPT Pro 수동 전략 레인 — 운영자가 요청 패킷을 복사해 ChatGPT Pro에 붙여넣고 답변을 다시 붙여넣습니다. 자동 스폰/직접 파일 쓰기는 없습니다.",
+        },
         "gemini_collaborator": {
             "configured": gemini_enabled,
             **split_health(
@@ -7219,7 +7286,7 @@ LANE_SPECS: dict[str, tuple[str, str]] = {
     "codex_subscription_worker": ("codex_subscription_worker", "external_codex_cli"),
     "claude_collaborator": ("claude_collaborator", "live_claude_cli"),
     "openai-strategy-advisor-api": ("openai_agents_sdk", "live_openai_api"),
-    "chatgpt_pro_manual_strategist": ("claude_collaborator", "external_chatgpt_pro_manual"),
+    "chatgpt_pro_manual_strategist": ("chatgpt_pro_manual_strategist", "external_chatgpt_pro_manual"),
 }
 # Friendly aliases so callers can pass short lane names.
 LANE_ALIASES: dict[str, str] = {
@@ -7406,7 +7473,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
                         "workflow_states": WORKFLOW_STATES,
                         "review_lanes": REVIEW_LANES,
                         "lanes": build_lanes(),
-                        "issue_regression": issue_regression_report(),
+                        # FIX4: the heavy issue regression markdown scan is kept
+                        # off the /api/status hot path. The full report is available
+                        # on-demand at GET /api/issue-evals.
                         "unity_target": unity_target_summary(),
                         "shared_workspace": build_shared_workspace(),
                         "issue_memory": build_issue_memory_summary(),
@@ -7527,15 +7596,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 record = append_operator_message(self._read_json_body())
                 if QUEUE_PROCESSOR_ENABLED and QUEUE_AUTORUN_ENABLED:
                     process_operator_queue_once(max_count=QUEUE_AUTORUN_MAX_PER_TICK)
-                resolved = lookup_message_effective_run(str(record.get("id", "")), record)
-                self._send_json(
-                    {
-                        "message": record,
-                        "created_run_id": resolved.get("created_run_id", ""),
-                        "effective_status": resolved.get("effective_status", ""),
-                    },
-                    status=201,
-                )
+                self._send_json(build_post_message_response(record), status=201)
                 return
             if parsed.path == "/api/messages/steer":
                 body = self._read_json_body()
@@ -7570,7 +7631,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/run/reconcile":
                 body = self._read_json_body()
-                run_id = str(body.get("id", "")).strip()
+                run_id = str(body.get("id") or body.get("run_id") or "").strip()
                 if not run_id:
                     raise ValueError("id is required")
                 run_dir = safe_run_dir(run_id)

@@ -4,15 +4,31 @@
   "target_repo": "sc-spire-unity",
   "project_type": "unity",
   "root_path": "D:/hobby/sc-spire-unity",
-  "unity_version": "",
-  "entry_scenes": [],
-  "build_targets": ["Windows"],
-  "verification_commands": [],
+  "unity_version": "6000.4.6f1",
+  "entry_scenes": [
+    "Assets/Scenes/Main.unity",
+    "Assets/Scenes/CombatPrototype.unity"
+  ],
+  "build_targets": ["StandaloneWindows64"],
+  "surfaces": [
+    "Assets/Scripts",
+    "Assets/UI",
+    "Assets/UI Toolkit",
+    "Assets/Editor",
+    "Assets/Scenes",
+    "Assets/StreamingAssets"
+  ],
+  "verification_commands": [
+    "Unity -batchmode -quit -projectPath . -runTests -testPlatform EditMode",
+    "Unity -batchmode -quit -projectPath . -buildTarget Win64 -executeMethod BuildScript.Build"
+  ],
+  "verification_commands_note": "templates — replace `Unity` with the resolved 6000.4.6f1 editor executable path; BuildScript.Build is a placeholder build entry point.",
   "rendered_evidence_required": true,
   "parity_sources": [
     "original sc-spire mechanics",
     "original assets",
     "original UI/flow"
   ],
-  "known_missing_systems": []
+  "known_missing_systems": [],
+  "_note": "known_missing_systems to be populated from original sc-spire parity analysis"
 }
