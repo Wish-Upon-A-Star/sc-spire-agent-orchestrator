@@ -677,6 +677,30 @@ function statusClass(status) {
   return String(status || "unknown").replace(/[^a-z0-9_-]/gi, "_");
 }
 
+// Humanize raw snake_case backend statuses for card eyebrows/labels.
+// Prefer the single workflow-state schema (label_ko) so backend/frontend stay
+// in sync; else a small fallback map for the frequent machine strings; else
+// keep the original value with underscores turned into spaces. The raw value
+// should still be exposed via a title="" tooltip at the call site.
+const HUMANIZE_STATUS_FALLBACK = {
+  blocked_until_worker_result: "작업자 결과 대기",
+  mandatory_advisor_request_prepared: "보좌관 요청 준비",
+  mandatory_structured_advisor_gate: "구조화 보좌관 게이트",
+  mandatory_review_queued_for_subscription_reviewer: "검토 대기",
+  queued_for_subscription_worker: "작업자 큐 대기",
+  prepared: "준비됨",
+  sequential_work_item: "순차 처리",
+};
+
+function humanizeStatus(status) {
+  const raw = String(status ?? "").trim();
+  if (!raw) return "";
+  const fromSchema = state.queueStatus?.workflow_states?.[raw]?.label_ko;
+  if (fromSchema) return fromSchema;
+  if (HUMANIZE_STATUS_FALLBACK[raw]) return HUMANIZE_STATUS_FALLBACK[raw];
+  return raw.replace(/_/g, " ");
+}
+
 function renderQueueStatus(payload) {
   const all = (payload?.messages || []).filter((message) => {
     const status = message.effective_status || message.latest_event?.status || "legacy_record";
@@ -720,7 +744,7 @@ function renderQueueStatus(payload) {
       return `
         <article class="queue-item" data-message-id="${escapeHtml(message.id || "")}">
           <div class="queue-item-head">
-            <span class="queue-status ${escapeHtml(statusClass(status))}">${escapeHtml(statusLabel(status))}</span>
+            <span class="queue-status ${escapeHtml(statusClass(status))}" title="${escapeHtml(status || "")}">${escapeHtml(humanizeStatus(statusLabel(status)))}</span>
             <time>${escapeHtml(formatKoreanTime(latest.timestamp || message.created_at || ""))}</time>
           </div>
           <p>${escapeHtml(original)}</p>
@@ -737,7 +761,7 @@ function renderQueueStatus(payload) {
               : `<div class="queue-actions-readonly">처리된 기록입니다. 실행 상세는 run 버튼에서 확인하세요.</div>`
           }
           ${runId ? `<button class="queue-run-link" data-run-id="${escapeHtml(runId)}" type="button">${escapeHtml(runId)}</button>` : ""}
-          ${events.length ? `<div class="queue-steps">${events.map((event) => `<span>${escapeHtml(statusLabel(event.status))}</span>`).join("")}</div>` : ""}
+          ${events.length ? `<div class="queue-steps">${events.map((event) => `<span title="${escapeHtml(event.status || "")}">${escapeHtml(humanizeStatus(statusLabel(event.status)))}</span>`).join("")}</div>` : ""}
         </article>
       `;
     })
@@ -1384,7 +1408,7 @@ function renderAdvisoryCouncil(plan, artifacts) {
             return `
               <article class="${cls}">
                 <strong>${escapeHtml(advisor.agent || "")}</strong>
-                <span>${escapeHtml(advisor.route || "")} · ${escapeHtml(advisor.status || "")}</span>
+                <span title="${escapeHtml(advisor.status || "")}">${escapeHtml(advisor.route || "")} · ${escapeHtml(humanizeStatus(advisor.status))}</span>
                 <small>${escapeHtml(advisor.result_artifact || advisor.required_artifact || "")} ${resultOk ? "결과 있음" : requestOk ? "요청 준비" : "대기"}</small>
               </article>
             `;
@@ -1687,7 +1711,7 @@ function renderWorkColumn(title, items, emptyText) {
                 const disabled = item.run_id ? "" : " disabled";
                 return `
                   <button class="work-item" data-run-id="${escapeHtml(item.run_id || "")}" type="button"${disabled}>
-                    <span class="queue-status ${escapeHtml(statusClass(item.status))}">${escapeHtml(statusLabel(item.status))}</span>
+                    <span class="queue-status ${escapeHtml(statusClass(item.status))}" title="${escapeHtml(item.status || "")}">${escapeHtml(humanizeStatus(statusLabel(item.status)))}</span>
                     <strong>${escapeHtml(item.title || item.id)}</strong>
                     <small>${escapeHtml(item.detail || item.route || "")}</small>
                   </button>
@@ -1942,10 +1966,10 @@ function renderSelectedIssueGate(run) {
             (gate) => `
               <article class="issue-hit high">
                 <header>
-                  <strong>${escapeHtml(gate.source_issue || "")} ${escapeHtml(gate.title || "")}</strong>
+                  <strong>${escapeHtml(gate.title || "")}</strong>
                   <span>승격된 이슈 게이트</span>
                 </header>
-                <p>${escapeHtml(gate.gate || "")}</p>
+                ${gate.source_issue ? `<small class="issue-hit-eyebrow" title="${escapeHtml(gate.gate || "")}">${escapeHtml(gate.source_issue)}</small>` : ""}
                 <small>통과 기준: ${(gate.binary_pass_criteria || []).map(escapeHtml).join(" · ")}</small>
               </article>
             `,
@@ -2510,7 +2534,7 @@ function renderDispatchPreview(dispatch) {
           .map(
             (route) => `
               <article class="dispatch-route ${escapeHtml(statusClass(route.status))}">
-                <span>${escapeHtml(route.status || "")}</span>
+                <span title="${escapeHtml(route.status || "")}">${escapeHtml(humanizeStatus(route.status))}</span>
                 <strong>${escapeHtml(route.agent || "")}</strong>
                 <small>${escapeHtml(route.route || "")}</small>
                 <p>${escapeHtml(route.reason || "")}</p>
@@ -2625,7 +2649,7 @@ function renderMainStatusBanner(run) {
       : `상태: ${handoff.status || "확인 필요"}`;
   const assignedWorkers = assignments
     .filter((item) => ["queued_for_subscription_worker", "review_queued_for_subscription_reviewer", "prepared", "blocked_until_worker_result"].includes(item.status))
-    .map((item) => `${item.agent}: ${item.status}`)
+    .map((item) => `${item.agent}: ${humanizeStatus(item.status)}`)
     .slice(0, 4)
     .join(" / ");
   return `

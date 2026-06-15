@@ -234,6 +234,18 @@ fetch 계측 + 실제 버튼 클릭으로 동작 확인. **JS 에러 0**.
 - 셀렉트 3개(message-target/result-type/result-status) 변경 에러 없음
 **결론:** 인터랙티브 컨트롤 12버튼+3셀렉트+텍스트area 전부 올바른 엔드포인트 호출+상태 갱신. 화면 "한눈에" + 기능 동작 양쪽 실측 통과.
 
+## 🎨 UI 전역 정리 2차 (사용자: "전체 탭 다 문제, 말 안하면 몰라?") · ✅ 6탭 전수 감사·수정·재확인
+
+사용자 정정: 개별 버그가 아니라 **전 탭 공통 문제**(밀도/위계 부재)를 스스로 못 본 것. 6탭 전수 감사로 공통 문제 4종 도출·수정:
+1. **숨막히는 밀도** → 전역 spacing 상향(카드 padding 16-18, grid gap 12-16, 섹션 간격 20-24, 상단 헤더/커맨드바/탭 여백).
+2. **위계 부재** → 카드 제목 focal(크게/semibold), 기계문자열·파일명은 muted+mono로 강등, 탭마다 lead 요소.
+3. **기계문자열 날것** → `humanizeStatus()` 헬퍼(workflow_states label_ko 우선 + fallback map): `blocked_until_worker_result`→"작업자 결과 대기" 등. work-board/queue/records/dispatch/advisory 렌더에 적용, 원문은 title 툴팁.
+4. **이슈카드 KO+EN 중복** → 중복 EN 줄 제거, KO 요약 1회 + ISSUE-id muted.
+또 좌측 패널 1차에서: 체크박스 inline+설명, "실시간 큐" 중복 제거, eyebrow 한글 자간 정상.
+
+**검증(6탭 전수 시각 확인):** ✅ 상태(여백·메트릭타일·산문벽접힘) / 작업자대화(깔끔) / 마일스톤(P0카드그리드) / 이슈공유(중복제거·간격) / 실행기록(**기계문자열 한글화 확인**) / 라우팅(provider카드 여백). smoke ok / pytest 39 / 모든 id·핸들러·마커 보존 / 한글 정상.
+**남은(정직):** 이슈 통과기준 줄은 여전히 기술 EN(의도적 criteria), 이슈 candidate 카운트 큰 숫자(로그 방대), 우측 큐 항목 버튼 5개 밀도는 여전히 있음(추가 정리 여지).
+
 ## A6 (atomic write) + A7 (regression test) + B1 (동적 캐시버전) · ✅ 완료·검증
 
 **A6:** `write_json_atomic`(temp 동일디렉토리+flush+fsync+os.replace), `write_json`이 위임 → 모든 caller atomic. per-run lock infra(`run_write_lock`) 제공(call site 소급은 점진).
