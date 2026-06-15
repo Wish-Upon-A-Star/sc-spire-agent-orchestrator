@@ -351,6 +351,10 @@ const el = {
   recordE2e: document.getElementById("record-e2e"),
   submitResult: document.getElementById("submit-result"),
   resultStatusMessage: document.getElementById("result-status-message"),
+  gptProRequest: document.getElementById("gpt-pro-request"),
+  gptProResult: document.getElementById("gpt-pro-result"),
+  gptProAnswer: document.getElementById("gpt-pro-answer"),
+  gptProStatus: document.getElementById("gpt-pro-status"),
   tabButtons: Array.from(document.querySelectorAll("[data-tab-target]")),
   tabPanels: Array.from(document.querySelectorAll("[data-tab-panel]")),
 };
@@ -2903,6 +2907,77 @@ if (el.runClaudeReview) {
       el.resultStatusMessage.textContent = error.message;
     } finally {
       el.runClaudeReview.disabled = false;
+    }
+  });
+}
+
+// L2 GPT Pro manual strategist lane: build packet + record pasted answer.
+if (el.gptProRequest) {
+  el.gptProRequest.addEventListener("click", async () => {
+    if (el.gptProStatus) el.gptProStatus.textContent = "";
+    const runId = state.selectedRun?.id || "";
+    if (!runId) {
+      if (el.gptProStatus) el.gptProStatus.textContent = "먼저 실행 기록을 선택하세요.";
+      return;
+    }
+    el.gptProRequest.disabled = true;
+    try {
+      const data = await postJson("/api/run/gpt-pro-request", { id: runId });
+      if (el.gptProStatus) {
+        el.gptProStatus.textContent =
+          `패킷 생성됨: ${data.artifact} — 이 .md 파일 내용을 복사해 ChatGPT Pro에 붙여넣으세요.\n\n` +
+          `미리보기:\n${data.request_preview || ""}`;
+      }
+      state.selectedRun = data.run;
+      renderRuns();
+      renderRunHeader(data.run);
+      renderRunSummary(data.run);
+      renderAgentConversation(data.run);
+      renderTimeline(data.run.events || []);
+      renderTranscriptDetailsSummary(data.run);
+      renderInspector(null);
+      await refreshLiveStatus();
+    } catch (error) {
+      if (el.gptProStatus) el.gptProStatus.textContent = error.message;
+    } finally {
+      el.gptProRequest.disabled = false;
+    }
+  });
+}
+
+if (el.gptProResult) {
+  el.gptProResult.addEventListener("click", async () => {
+    if (el.gptProStatus) el.gptProStatus.textContent = "";
+    const runId = state.selectedRun?.id || "";
+    if (!runId) {
+      if (el.gptProStatus) el.gptProStatus.textContent = "먼저 실행 기록을 선택하세요.";
+      return;
+    }
+    const answer = el.gptProAnswer?.value || "";
+    if (!answer.trim()) {
+      if (el.gptProStatus) el.gptProStatus.textContent = "GPT Pro 응답을 붙여넣으세요.";
+      return;
+    }
+    el.gptProResult.disabled = true;
+    try {
+      const data = await postJson("/api/run/gpt-pro-result", { id: runId, answer });
+      if (el.gptProStatus) {
+        el.gptProStatus.textContent =
+          `기록됨: ${data.artifact} / verdict=${data.verdict} / schema_valid=${data.schema_valid}`;
+      }
+      state.selectedRun = data.run;
+      renderRuns();
+      renderRunHeader(data.run);
+      renderRunSummary(data.run);
+      renderAgentConversation(data.run);
+      renderTimeline(data.run.events || []);
+      renderTranscriptDetailsSummary(data.run);
+      renderInspector(null);
+      await refreshLiveStatus();
+    } catch (error) {
+      if (el.gptProStatus) el.gptProStatus.textContent = error.message;
+    } finally {
+      el.gptProResult.disabled = false;
     }
   });
 }

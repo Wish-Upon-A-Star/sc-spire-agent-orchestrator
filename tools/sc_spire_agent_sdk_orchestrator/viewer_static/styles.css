@@ -3043,3 +3043,6 @@ h2 {
 .command-strip { display: flex; flex-wrap: wrap; gap: 14px; padding: 8px 12px; margin: 0 0 8px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
 .command-strip .cs-cell b { color: var(--muted); font-weight: 500; margin-right: 5px; }
 .command-strip .cs-cell.warn { color: var(--accent-2); }
+.gpt-pro-divider { border: none; border-top: 1px solid var(--line); margin: 12px 0 8px; }
+#gpt-pro-answer { width: 100%; margin: 6px 0; }
+#gpt-pro-status { white-space: pre-wrap; }

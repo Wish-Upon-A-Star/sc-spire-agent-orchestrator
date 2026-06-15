@@ -645,6 +645,204 @@ def summarize_run_context(run_id: str) -> dict[str, object]:
     }
 
 
+# L2 GPT Pro manual strategist lane ------------------------------------------
+
+GPT_PRO_REQUEST_ARTIFACT = "gpt-pro-review-request.md"
+GPT_PRO_RESULT_ARTIFACT = "gpt-pro-review-result.json"
+GPT_PRO_DEFAULT_MODEL = "gpt-5.5-pro"
+
+
+def build_gpt_pro_request_markdown(run_id: str, capsule: dict[str, object]) -> str:
+    """Build the compact GPT Pro Strategic Review Request packet (L2).
+
+    A slow strategic-review lane fed by manual copy-paste. The operator pastes
+    this into ChatGPT Pro and pastes the JSON answer back. Context is pulled from
+    the E2 context-capsule so the packet stays compact.
+    """
+    task = capsule.get("task") if isinstance(capsule.get("task"), dict) else {}
+    raw = str(task.get("raw", "")).strip()
+    refined = str(task.get("refined", "")).strip()
+    mode = str(task.get("mode", "")).strip()
+
+    policy = capsule.get("relevant_policy") if isinstance(capsule.get("relevant_policy"), list) else []
+    issues = capsule.get("relevant_issues") if isinstance(capsule.get("relevant_issues"), list) else []
+    artifacts = capsule.get("current_artifacts") if isinstance(capsule.get("current_artifacts"), list) else []
+    missing = capsule.get("missing_evidence") if isinstance(capsule.get("missing_evidence"), list) else []
+
+    lines: list[str] = []
+    lines.append("# GPT Pro Strategic Review Request")
+    lines.append("")
+    lines.append(f"- run_id: `{run_id}`")
+    lines.append(f"- mode: `{mode or 'normal'}`")
+    lines.append("")
+    lines.append("## Role")
+    lines.append(
+        "You are a slow, senior strategic reviewer for an autonomous game-dev "
+        "orchestrator (SC Spire). You give architecture critique, prompt/persona "
+        "compression advice, failure-pattern analysis, and a closure challenge. "
+        "You are a REVIEW-ONLY lane: you do not approve final completion."
+    )
+    lines.append("")
+    lines.append("## Do NOT")
+    lines.append("- Do NOT claim the work is closed/complete; you cannot grant closure.")
+    lines.append("- Do NOT edit files or run commands; you only advise.")
+    lines.append("- Do NOT invent evidence; if evidence is missing, say needs_retry or blocked.")
+    lines.append("- Do NOT pretend to be an automated browser session; this is manual copy-paste.")
+    lines.append("")
+    lines.append("## Context (from this run's context-capsule)")
+    lines.append(f"- Raw operator request: {raw or '(none)'}")
+    lines.append(f"- Refined task: {refined or '(none)'}")
+    if policy:
+        lines.append("- Standing policy lines:")
+        for item in policy:
+            lines.append(f"  - {item}")
+    if issues:
+        lines.append("- Relevant past issues / countermeasures:")
+        for issue in issues:
+            if isinstance(issue, dict):
+                summary = str(issue.get("summary", "")).strip()
+                counter = str(issue.get("countermeasure", "")).strip()
+                lines.append(f"  - {summary}" + (f" — {counter}" if counter else ""))
+    if artifacts:
+        names = ", ".join(str(item.get("name", "")) for item in artifacts if isinstance(item, dict))
+        lines.append(f"- Current artifacts present: {names}")
+    lines.append(f"- Missing expected evidence: {', '.join(str(m) for m in missing) if missing else '(none)'}")
+    lines.append("")
+    lines.append("## Questions (answer all 6)")
+    lines.append("1. Is the orchestrator architecture / approach sound for this task, or is it drifting?")
+    lines.append("2. Are the prompts/personas compressible or redundant? Where?")
+    lines.append("3. What failure pattern, if any, is repeating across the artifacts/issues above?")
+    lines.append("4. If this is a Unity recovery or replanning situation, what is the safest next plan?")
+    lines.append("5. What evidence is missing before this could ever be closed?")
+    lines.append("6. If asked to close now, what is your closure objection (closure must stay disallowed)?")
+    lines.append("")
+    lines.append("## Output (JSON ONLY — no prose outside the JSON)")
+    lines.append("Return a single JSON object with exactly these fields:")
+    lines.append("```json")
+    lines.append("{")
+    lines.append('  "verdict": "pass | needs_retry | blocked",')
+    lines.append('  "top_findings": [')
+    lines.append('    {"severity": "high|medium|low", "claim": "...", "because": "...", "required_evidence": "..."}')
+    lines.append("  ],")
+    lines.append('  "missing_evidence": ["..."],')
+    lines.append('  "do_not_repeat": ["..."],')
+    lines.append('  "next_action": "..."')
+    lines.append("}")
+    lines.append("```")
+    lines.append("Keep top_findings to at most 5 items. Output JSON only.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def parse_gpt_pro_answer(answer: str) -> object:
+    """Parse an operator-pasted GPT Pro answer; strip ```json fences if present.
+
+    Returns the parsed object on success, otherwise None (caller wraps it).
+    """
+    text = (answer or "").strip()
+    if not text:
+        return None
+    if text.startswith("```"):
+        # Drop the opening fence line (``` or ```json) and any trailing fence.
+        without_open = text.split("\n", 1)[1] if "\n" in text else ""
+        if without_open.rstrip().endswith("```"):
+            without_open = without_open.rstrip()[: -3]
+        text = without_open.strip()
+    try:
+        return json.loads(text)
+    except (ValueError, TypeError):
+        return None
+
+
+def build_gpt_pro_result_record(
+    run_id: str, answer: str, model_claimed: str = GPT_PRO_DEFAULT_MODEL
+) -> dict[str, object]:
+    """Build the L2 GPT Pro strategy review result record from a pasted answer.
+
+    Parses the answer as JSON (fence-stripped). On parse failure the answer is
+    wrapped as {"raw": ..., "verdict": "needs_retry"}. Stamps manual provenance
+    (external_chatgpt_pro_manual, operator claim) and annotates E4 schema status.
+    """
+    parsed = parse_gpt_pro_answer(answer)
+    if isinstance(parsed, dict):
+        record: dict[str, object] = dict(parsed)
+    else:
+        record = {"raw": answer, "verdict": "needs_retry"}
+    record["kind"] = "gpt_pro_strategy_review"
+    record["source"] = "manual_chatgpt_pro"
+    record["run_id"] = run_id
+    record["created_at"] = utc_timestamp()
+    record["model_claimed_by_operator"] = str(model_claimed or GPT_PRO_DEFAULT_MODEL)
+    record["provenance"] = make_provenance(
+        "external_chatgpt_pro_manual", "operator", is_claim_evidence=True
+    )
+    schema_valid, schema_errors = validate_review_output(record)
+    record["schema_valid"] = schema_valid
+    record["schema_errors"] = schema_errors
+    return record
+
+
+def build_gpt_pro_request(payload: dict[str, object]) -> dict[str, object]:
+    run_id = str(payload.get("id", "")).strip()
+    if not run_id:
+        raise ValueError("id is required")
+    run_dir = safe_run_dir(run_id)
+    capsule_path = run_dir / CONTEXT_CAPSULE_ARTIFACT
+    if capsule_path.exists():
+        try:
+            capsule = read_json_file(capsule_path)
+        except Exception:
+            capsule = build_context_capsule(run_id, run_dir, mode=_run_capsule_mode(run_dir))
+        if not isinstance(capsule, dict):
+            capsule = build_context_capsule(run_id, run_dir, mode=_run_capsule_mode(run_dir))
+    else:
+        capsule = build_context_capsule(run_id, run_dir, mode=_run_capsule_mode(run_dir))
+    markdown = build_gpt_pro_request_markdown(run_id, capsule)
+    (run_dir / GPT_PRO_REQUEST_ARTIFACT).write_text(markdown, encoding="utf-8")
+    append_transcript_event(
+        run_dir,
+        "gpt-pro-strategy-advisor",
+        "operator",
+        "gpt_pro_request_built",
+        "GPT Pro 수동 전략 검토 요청 패킷 생성",
+        GPT_PRO_REQUEST_ARTIFACT,
+    )
+    invalidate_status_cache()
+    return {
+        "run": run_payload(run_id),
+        "artifact": GPT_PRO_REQUEST_ARTIFACT,
+        "request_preview": markdown[:600],
+    }
+
+
+def record_gpt_pro_result(payload: dict[str, object]) -> dict[str, object]:
+    run_id = str(payload.get("id", "")).strip()
+    if not run_id:
+        raise ValueError("id is required")
+    run_dir = safe_run_dir(run_id)
+    answer = str(payload.get("answer", ""))
+    if not answer.strip():
+        raise ValueError("answer is required")
+    model_claimed = str(payload.get("model_claimed", "")).strip() or GPT_PRO_DEFAULT_MODEL
+    record = build_gpt_pro_result_record(run_id, answer, model_claimed)
+    write_json(run_dir / GPT_PRO_RESULT_ARTIFACT, record)
+    append_transcript_event(
+        run_dir,
+        "gpt-pro-strategy-advisor",
+        "main-orchestrator",
+        "gpt_pro_review_result",
+        f"GPT Pro 수동 전략 검토 결과 기록 (verdict={record.get('verdict', '')})",
+        GPT_PRO_RESULT_ARTIFACT,
+    )
+    invalidate_status_cache()
+    return {
+        "run": run_payload(run_id),
+        "artifact": GPT_PRO_RESULT_ARTIFACT,
+        "schema_valid": record.get("schema_valid"),
+        "verdict": record.get("verdict"),
+    }
+
+
 def read_openai_api_key() -> str:
     env_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if env_key:
@@ -727,6 +925,37 @@ AGENT_PERSONAS = {
         ],
         "forbidden": ["원문 삭제", "완료 판단", "worker 직접 실행", "메인 라우팅 확정"],
         "must_read": ["provider_routing.json", "operator_message_events.jsonl", "memory/issues_log/*.md"],
+    },
+    "gpt-pro-strategy-advisor": {
+        "name": "GPT Pro 전략 보좌관 (수동)",
+        "identity": "느린 수동 ChatGPT Pro 전략 검토 레인입니다. 오케스트레이터가 만든 압축 요청 패킷을 오너가 ChatGPT Pro에 직접 붙여넣고, 응답을 다시 붙여넣어 provenance와 함께 보관합니다. 브라우저 자동화 없이 사람이 중간에 붙여넣는 human-gated escalation 레인입니다.",
+        "route": "chatgpt_pro_manual_strategist",
+        "permissions": [
+            "architecture_review",
+            "prompt_persona_review",
+            "failure_pattern_analysis",
+            "milestone_replanning",
+            "closure_objection",
+        ],
+        "focus": [
+            "오케스트레이터 구조/아키텍처 비평",
+            "prompt/persona 압축 및 재설계 검토",
+            "반복 실패(failure pattern) 분석",
+            "Unity 복구 계획 / 마일스톤 재계획 검토",
+            "high-risk 작업의 closure 직전 반박",
+        ],
+        "forbidden": [
+            "최종 완료 승인",
+            "파일 직접 수정",
+            "Pro 응답만으로 closure",
+            "자동 브라우저 세션",
+        ],
+        "review_only": True,
+        "must_read": [
+            "context-capsule.json",
+            "current blockers",
+            "latest worker/validator summaries",
+        ],
     },
     "prompt-validator-agent": {
         "name": "프롬프트/계획 검증",
@@ -6312,6 +6541,12 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/run/result":
                 self._send_json(record_run_result(self._read_json_body()), status=201)
+                return
+            if parsed.path == "/api/run/gpt-pro-request":
+                self._send_json(build_gpt_pro_request(self._read_json_body()), status=201)
+                return
+            if parsed.path == "/api/run/gpt-pro-result":
+                self._send_json(record_gpt_pro_result(self._read_json_body()), status=201)
                 return
             if parsed.path == "/api/run/advance":
                 self._send_json(advance_run_once(self._read_json_body()), status=201)

@@ -122,6 +122,30 @@
         "enabled": "SC_SPIRE_OPENAI_ORCHESTRATOR_ENABLED"
       }
     },
+    "chatgpt_pro_manual_strategist": {
+      "enabled": true,
+      "priority": 2,
+      "provider": "openai",
+      "billing": "chatgpt_pro_subscription_manual",
+      "surface": "manual_copy_paste_chatgpt_pro",
+      "default_model": "gpt-5.5-pro",
+      "auto_spawn": false,
+      "manual_surface_available": true,
+      "best_for": [
+        "slow strategic review",
+        "orchestrator architecture critique",
+        "prompt/persona compression",
+        "failure pattern analysis",
+        "Unity recovery plan review",
+        "closure challenge for high-risk work"
+      ],
+      "avoid_for": [
+        "automatic background execution",
+        "local file edits",
+        "high-frequency preflight",
+        "programmatic account automation"
+      ]
+    },
     "gemini_collaborator": {
       "enabled": false,
       "priority": 4,

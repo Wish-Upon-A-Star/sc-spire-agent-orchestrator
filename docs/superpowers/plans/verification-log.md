@@ -132,6 +132,15 @@ Codex가 진짜 버그 4건 지적:
 - ✅ Codex: **SOUND** — run_payload 순수 read 유지, build_context_capsule 전 예외경로 폴백(reconcile try/except 안), validate_review_output 완전 방어적(어떤 입력도 raise 안 함)
 - 비차단 노트(Codex): (MEDIUM) run_dir 없으면 missing_evidence 노이즈 / (LOW) `_artifact_trust`가 reconcile마다 artifact 전부 read·상한 없음 → artifact 폭발 시 A6/B2와 함께 처리. 현 규모(~37개) 무시 가능.
 
+## L2 (GPT-Pro 수동 전략레인 MVP) · ✅ 완료·검증 — north-star 첫 동작
+
+route `chatgpt_pro_manual_strategist`(auto_spawn:false, manual surface) + persona `gpt-pro-strategy-advisor`(review_only) + POST `/api/run/gpt-pro-request`(context-capsule 기반 압축 패킷 `gpt-pro-review-request.md`) + POST `/api/run/gpt-pro-result`(운영자 붙여넣기→`gpt-pro-review-result.json`, source=manual_chatgpt_pro, provenance external_chatgpt_pro_manual, model_claimed_by_operator, E4 validate 주석) + 우측 패널 버튼 2개. 캐시 v7. zero-dep.
+
+**검증:**
+- ✅ 나 직접: pytest **16 passed**(+gpt_pro_result_record_shape, JSON/비JSON 양쪽) / smoke `{"ok":true}` / 라이브 두 엔드포인트(패킷 생성 + result 저장 schema_valid=true) / served app.js gpt-pro 핸들러 확인
+- ✅ 자가 코드검토(Codex infra 다운 — `service_tier:flex` 계정 거부): `safe_run_dir`로 path-traversal 차단, id/answer 검증, parse 실패→wrap(raise 없음), 패킷 입력=capsule만이라 시크릿 누출 없음. sound.
+- 🔧 인프라: `~/.codex/config.toml` `service_tier="flex"` → 계정이 API 400 거부 → **제거(계정 기본 tier)**. 다음 Codex 검증축 복구 시도.
+
 ## 남은 일 (커밋 보류 상태)
 - git 커밋 전부 보류 중 (working tree에 무관 게임 WIP 995개). 사용자가 원하면 `tools/sc_spire_agent_sdk_orchestrator/` + `docs/superpowers/plans/` 만 scoped commit 가능.
 - 변경 파일: viewer_server.py, viewer_static/{app.js,index.html,styles.css}, test_viewer_units.py, smoke_test_viewer.py (+ ~/.codex/config.toml 1줄).

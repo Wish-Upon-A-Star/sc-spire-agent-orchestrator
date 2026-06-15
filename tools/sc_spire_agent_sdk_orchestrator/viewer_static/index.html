@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SC Spire 에이전트 실행 기록</title>
-    <link rel="stylesheet" href="/styles.css?v=20260615-viewer-improv-v6" />
+    <link rel="stylesheet" href="/styles.css?v=20260615-viewer-improv-v7" />
   </head>
   <body>
     <div class="shell">
@@ -159,10 +159,16 @@
             <button id="record-e2e" type="button">화면 E2E 검증 기록</button>
             <button id="submit-result" type="button">결과 기록</button>
             <p id="result-status-message" class="message-status"></p>
+            <hr class="gpt-pro-divider" />
+            <p class="eyebrow">GPT Pro 수동 전략 검토 (L2)</p>
+            <button id="gpt-pro-request" type="button">GPT Pro 검토 패킷 만들기</button>
+            <textarea id="gpt-pro-answer" rows="5" placeholder="ChatGPT Pro 응답(JSON)을 여기에 붙여넣으세요"></textarea>
+            <button id="gpt-pro-result" type="button">GPT Pro 답변 붙여넣기</button>
+            <p id="gpt-pro-status" class="message-status"></p>
           </details>
         </section>
       </aside>
     </div>
-    <script src="/app.js?v=20260615-viewer-improv-v6"></script>
+    <script src="/app.js?v=20260615-viewer-improv-v7"></script>
   </body>
 </html>

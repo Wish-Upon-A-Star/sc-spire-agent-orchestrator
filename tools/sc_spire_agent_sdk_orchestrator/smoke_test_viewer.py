@@ -125,6 +125,8 @@ def main() -> int:
             "메시지 넣기",
             "작업자/검토 결과 기록",
             "화면 E2E 검증 기록",
+            "GPT Pro 검토 패킷 만들기",
+            "GPT Pro 답변 붙여넣기",
         ],
     )
 
@@ -154,11 +156,14 @@ def main() -> int:
             "Adapter",
             "renderPreflightBanner",
             "renderCommandStrip",
+            "/api/run/gpt-pro-request",
+            "/api/run/gpt-pro-result",
+            "gptProRequest",
         ],
     )
 
     styles = fetch_text("/styles.css")
-    assert_contains("styles", styles, ["ops-console", "ops-metric", "ops-checks", "ops-validator-lanes", "ops-advisory", "ops-advisor-grid", "ops-deliberation", "report-pack-summary", "report-pack-verdict", "report-evidence-audit", "goal-completion-audit", "unity-rendered-evidence", "preflight-banner", "command-strip"])
+    assert_contains("styles", styles, ["ops-console", "ops-metric", "ops-checks", "ops-validator-lanes", "ops-advisory", "ops-advisor-grid", "ops-deliberation", "report-pack-summary", "report-pack-verdict", "report-evidence-audit", "goal-completion-audit", "unity-rendered-evidence", "preflight-banner", "command-strip", "gpt-pro-divider"])
 
     status = fetch_json("/api/status")
     for key in ["runs", "messages", "agents", "execution_lifecycle", "queue_processor", "execution_environment", "adapter_health", "live_preflight"]:

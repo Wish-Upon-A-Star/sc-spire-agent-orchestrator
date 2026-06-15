@@ -309,3 +309,36 @@ def test_validate_review_output_rejects_bad():
     assert not ok and errors
     ok, errors = viewer_server.validate_review_output(None)
     assert not ok and errors
+
+
+def test_gpt_pro_result_record_shape():
+    # L2: the GPT Pro manual strategist result record built from a pasted answer
+    # must carry manual provenance, the operator's claimed model, and an E4
+    # schema_valid annotation — for both well-formed and non-JSON answers.
+    run_id = "zz-test-gpt-pro"
+
+    # Well-formed JSON answer (with a ```json fence) -> parsed + schema_valid True.
+    good = (
+        "```json\n"
+        '{"verdict": "needs_retry", "top_findings": [], "missing_evidence": [],'
+        ' "do_not_repeat": [], "next_action": "gather worker evidence"}\n'
+        "```"
+    )
+    record = viewer_server.build_gpt_pro_result_record(run_id, good, "gpt-5.5-pro")
+    assert record["kind"] == "gpt_pro_strategy_review"
+    assert record["source"] == "manual_chatgpt_pro"
+    assert record["provenance"]["source_type"] == "external_chatgpt_pro_manual"
+    assert record["provenance"]["is_claim_evidence"] is True
+    assert record["model_claimed_by_operator"] == "gpt-5.5-pro"
+    assert "schema_valid" in record
+    assert record["schema_valid"] is True
+
+    # Non-JSON answer -> wrapped, no crash, schema_valid False, default model.
+    record2 = viewer_server.build_gpt_pro_result_record(run_id, "just some prose, not json")
+    assert record2["source"] == "manual_chatgpt_pro"
+    assert record2["provenance"]["source_type"] == "external_chatgpt_pro_manual"
+    assert record2["model_claimed_by_operator"]  # present (default)
+    assert record2["raw"] == "just some prose, not json"
+    assert record2["verdict"] == "needs_retry"
+    assert "schema_valid" in record2
+    assert record2["schema_valid"] is False
