@@ -2759,7 +2759,12 @@ el.sendMessage.addEventListener("click", async () => {
     el.messageStatus.textContent = `${t.queued}: ${data.message.id}`;
     el.messageText.value = "";
     await refreshLiveStatus();
-    await selectRunForMessage(data.message.id);
+    const newRunId = data.created_run_id || data.message.effective_run_id || "";
+    if (newRunId) {
+      await loadRun(newRunId);
+    } else {
+      await selectRunForMessage(data.message.id);
+    }
     const preflight = data.message.prompt_preflight || {};
     const warnings = preflight.warnings || [];
     const questions = preflight.clarifying_questions || [];

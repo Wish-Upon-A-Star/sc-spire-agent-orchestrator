@@ -228,19 +228,39 @@ def read_transcript(run_dir: Path) -> list[dict[str, object]]:
     return events
 
 
+def reconcile_run_artifacts(run_id: str, run_dir: Path) -> dict[str, object]:
+    """Run the derived-audit ensure_* reconcilers (which may WRITE files).
+
+    This is the mutating reconciliation step that used to live inside
+    run_payload. It is now only invoked from explicit POST flows so that the
+    GET /api/run path stays read-only (A1).
+    """
+    summary: dict[str, object] = {
+        "reconciled": [],
+        "skipped": False,
+    }
+    reconciled: list[str] = summary["reconciled"]  # type: ignore[assignment]
+    if not (run_dir / "d-drive-report-pack.json").exists():
+        summary["skipped"] = True
+        return summary
+    try:
+        if ensure_report_pack_judgment(run_id, run_dir) is not None:
+            reconciled.append("report-pack-judgment.json")
+        if ensure_report_evidence_audit(run_id, run_dir) is not None:
+            reconciled.append("report-evidence-audit.json")
+        if ensure_goal_completion_audit(run_id, run_dir) is not None:
+            reconciled.append("goal-completion-audit.json")
+    except Exception as exc:  # pragma: no cover - defensive parity with old behavior
+        summary["error"] = str(exc)
+    return summary
+
+
 def run_payload(run_id: str) -> dict[str, object]:
     run_dir = safe_run_dir(run_id)
     plan_path = run_dir / "orchestration-plan.json"
     chatkit_path = run_dir / "chatkit-thread.json"
     markdown_path = run_dir / "transcript.md"
     claude_prompt_path = run_dir / "claude-review-prompt.md"
-    if (run_dir / "d-drive-report-pack.json").exists():
-        try:
-            ensure_report_pack_judgment(run_id, run_dir)
-            ensure_report_evidence_audit(run_id, run_dir)
-            ensure_goal_completion_audit(run_id, run_dir)
-        except Exception:
-            pass
     plan = read_json_file(plan_path) if plan_path.exists() else None
     if isinstance(plan, dict):
         latest_plan_overrides = {
@@ -1513,6 +1533,21 @@ def operator_messages_with_status(limit: int = 100) -> list[dict[str, object]]:
     return messages
 
 
+def lookup_message_effective_run(message_id: str, message: dict[str, object] | None = None) -> dict[str, str]:
+    """Resolve the effective run id and status for a single operator message.
+
+    Uses the same derivation as operator_messages_with_status() so callers
+    (e.g. the /api/messages POST handler) can return created_run_id directly
+    instead of forcing the frontend to poll.
+    """
+    events = events_by_message_id().get(message_id, [])
+    latest = events[-1] if events else {}
+    base = message if isinstance(message, dict) else {}
+    effective_run_id = str(latest.get("run_id") or base.get("run_id", "") or "")
+    effective_status = workflow_status(events, str(base.get("status", "queued"))) if events else ""
+    return {"created_run_id": effective_run_id, "effective_status": effective_status}
+
+
 def title_for_message(message: dict[str, object], max_chars: int = 42) -> str:
     text = str(message.get("original_message") or message.get("message") or message.get("id") or "").strip()
     text = " ".join(text.split())
@@ -2507,6 +2542,7 @@ def record_run_result(payload: dict[str, object]) -> dict[str, object]:
     append_transcript_event(run_dir, role, recipient, event_type, summary, artifact_name)
     update_review_gate_after_result(run_dir, result_type, status, artifact_name)
     invalidate_status_cache()
+    reconcile_run_artifacts(run_id, run_dir)
     return {"run": run_payload(run_id), "artifact": artifact_name, "result": result}
 
 
@@ -2582,6 +2618,7 @@ def record_e2e_html_verification(payload: dict[str, object]) -> dict[str, object
     append_transcript_event(run_dir, "validator-ui-browser-level", "main-orchestrator", "review_result", summary, "e2e-html-verification.json")
     update_review_gate_after_result(run_dir, "browser_e2e", status, "e2e-html-verification.json")
     invalidate_status_cache()
+    reconcile_run_artifacts(run_id, run_dir)
     return {"run": run_payload(run_id), "artifact": "e2e-html-verification.json", "result": result}
 
 
@@ -3585,6 +3622,7 @@ def supervisor_auto_review_for_run(run_id: str) -> dict[str, object]:
 
     update_review_gate_after_result(run_dir, "supervisor_auto_review", "checked", "supervisor-auto-review-routing.json")
     invalidate_status_cache()
+    reconcile_run_artifacts(run_id, run_dir)
     return {"advanced": "supervisor_auto_review", "actions": actions, "run": run_payload(run_id)}
 
 
@@ -3703,6 +3741,7 @@ def advance_run_once(payload: dict[str, object]) -> dict[str, object]:
             "prompt-validation.json",
         )
         invalidate_status_cache()
+        reconcile_run_artifacts(run_id, run_dir)
         return {"advanced": "prompt_validation_blocked", "artifact": "prompt-validation.json", "run": run_payload(run_id)}
     ensure_main_advisory_council_artifact(run_dir)
     artifacts = {item.name for item in run_dir.iterdir() if item.is_file()}
@@ -3783,6 +3822,7 @@ def advance_run_once(payload: dict[str, object]) -> dict[str, object]:
             f"짧은 iteration 1회가 완료됐고 validator lane {len(lanes)}개가 같은 결과를 검증했습니다. 실패 lane이 있으면 다음 iteration은 prompt-preflight/main planning으로 되돌아가며, product/Claude review는 closure challenge gate입니다.",
             "review-gate.json",
         )
+        reconcile_run_artifacts(run_id, run_dir)
         return {
             "advanced": "worker_and_validators",
             "artifact": "worker-result.json",
@@ -3793,12 +3833,14 @@ def advance_run_once(payload: dict[str, object]) -> dict[str, object]:
     if "validator-result.json" not in artifacts:
         lanes = write_validator_lane_results(run_dir, run_id, checks, missing_sdk)
         aggregate = aggregate_validator_result(run_dir, run_id, lanes)
+        reconcile_run_artifacts(run_id, run_dir)
         return {"advanced": "validators", "validator_lanes": lanes, "artifact": "validator-result.json", "result": aggregate, "run": run_payload(run_id)}
 
     if is_goal_report_request(run_dir) and "d-drive-report-pack.json" not in artifacts:
         manifest = ensure_goal_report_pack(run_id, run_dir)
         update_review_gate_after_result(run_dir, "report_pack_worker", "passed", "d-drive-report-pack.json")
         invalidate_status_cache()
+        reconcile_run_artifacts(run_id, run_dir)
         return {"advanced": "d_drive_report_pack", "artifact": "d-drive-report-pack.json", "manifest": manifest, "run": run_payload(run_id)}
 
     if "claude-review-result.json" not in artifacts and "product-review-result.json" not in artifacts:
@@ -3824,6 +3866,7 @@ def advance_run_once(payload: dict[str, object]) -> dict[str, object]:
     if review_iteration_count(run_dir) < MIN_REVIEW_ITERATIONS_BEFORE_STOP:
         iteration_result = create_review_iteration(run_id, run_dir)
         invalidate_status_cache()
+        reconcile_run_artifacts(run_id, run_dir)
         return {
             "advanced": "review_iteration",
             "artifact": f"review-iteration-{int(iteration_result.get('iteration', 0)):03d}.json",
@@ -3834,11 +3877,13 @@ def advance_run_once(payload: dict[str, object]) -> dict[str, object]:
     closure_packet = ensure_closure_packet(run_id, run_dir)
     if closure_packet:
         invalidate_status_cache()
+        reconcile_run_artifacts(run_id, run_dir)
         return {"advanced": "closure_packet", "artifact": "closure-packet.json", "packet": closure_packet, "run": run_payload(run_id)}
 
     append_transcript_event(run_dir, "main-orchestrator", "operator", "advance_noop", "worker, validator, Claude/product review artifact가 이미 있습니다. review-gate 상태를 확인하세요.", "review-gate.json")
     update_review_gate_after_result(run_dir, "advance_check", "checked", "review-gate.json")
     invalidate_status_cache()
+    reconcile_run_artifacts(run_id, run_dir)
     return {"advanced": "noop", "run": run_payload(run_id), "artifact": "review-gate.json"}
 
 
@@ -5934,7 +5979,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 record = append_operator_message(self._read_json_body())
                 if QUEUE_PROCESSOR_ENABLED and QUEUE_AUTORUN_ENABLED:
                     process_operator_queue_once(max_count=QUEUE_AUTORUN_MAX_PER_TICK)
-                self._send_json({"message": record}, status=201)
+                resolved = lookup_message_effective_run(str(record.get("id", "")), record)
+                self._send_json(
+                    {
+                        "message": record,
+                        "created_run_id": resolved.get("created_run_id", ""),
+                        "effective_status": resolved.get("effective_status", ""),
+                    },
+                    status=201,
+                )
                 return
             if parsed.path == "/api/messages/steer":
                 body = self._read_json_body()
@@ -5960,6 +6013,16 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/run/advance":
                 self._send_json(advance_run_once(self._read_json_body()), status=201)
+                return
+            if parsed.path == "/api/run/reconcile":
+                body = self._read_json_body()
+                run_id = str(body.get("id", "")).strip()
+                if not run_id:
+                    raise ValueError("id is required")
+                run_dir = safe_run_dir(run_id)
+                reconciled = reconcile_run_artifacts(run_id, run_dir)
+                invalidate_status_cache()
+                self._send_json({"run": run_payload(run_id), "reconciled": reconciled}, status=200)
                 return
             if parsed.path == "/api/run/claude-review":
                 self._send_json(run_claude_review_for_run(self._read_json_body()), status=201)

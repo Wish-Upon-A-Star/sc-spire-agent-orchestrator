@@ -101,6 +101,20 @@ Codex가 진짜 버그 4건 지적:
 
 → 검증 요약표의 ⏳ 칸 전부 ✅ (Codex axis 통과).
 
+---
+
+# Review Subsystem track — 구현 진행 (/loop 자동)
+
+## A1 (GET read-only) + A5 (created_run_id) · ✅ 완료·검증
+
+**A1:** `run_payload`에서 `ensure_*`(write_text) 블록을 `reconcile_run_artifacts()`로 추출 → run_payload는 순수 read. 명시적 `POST /api/run/reconcile` 신설. 기존 동작 보존 위해 모든 mutating POST(record_run_result, e2e, supervisor_auto_review, advance_run_once 6개 return점)에서 reconcile 명시 호출.
+**A5:** `POST /api/messages`가 `created_run_id`+`effective_status` 반환(`lookup_message_effective_run`). 프론트는 created_run_id 우선, 없으면 폴링 폴백. 캐시 v5.
+
+**검증 (3중):**
+- ✅ 나 직접: pytest **9 passed**(+`test_get_run_is_read_only`) / smoke `{"ok":true}` / 라이브 GET → **새 파일 0**(read-only 확인) / A5 `created_run_id` 비어있지 않음
+- ✅ Codex: **SOUND** — run_payload 완전 side-effect-free, mutating POST 6+개 전부 reconcile 연결(누락 0), `run_claude_review`는 record_run_result 경유라 이중호출 없음, lookup 빈문자열→폴백 안전, reconcile `id` 검증+path-traversal 차단(`safe_run_dir`)+예외 삼킴(mutating POST 안 깨짐)
+- 수정 불필요.
+
 ## 남은 일 (커밋 보류 상태)
 - git 커밋 전부 보류 중 (working tree에 무관 게임 WIP 995개). 사용자가 원하면 `tools/sc_spire_agent_sdk_orchestrator/` + `docs/superpowers/plans/` 만 scoped commit 가능.
 - 변경 파일: viewer_server.py, viewer_static/{app.js,index.html,styles.css}, test_viewer_units.py, smoke_test_viewer.py (+ ~/.codex/config.toml 1줄).
