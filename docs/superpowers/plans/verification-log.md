@@ -183,6 +183,15 @@ route `chatgpt_pro_manual_strategist`(auto_spawn:false, manual surface) + person
 **검증:** ✅ 나 직접 pytest **35**(34+1skip) / smoke `{"ok":true}` / issue-evals 200·lanes 4·strategy-review local fallback 동작 / A1 회귀X / zero-dep. Codex 리뷰 진행중.
 - 관측: `issue_regression.count=36968`(로그가 방대 — `### ` 헤딩 실제 다수). seeds는 50 cap이라 payload bounded, 2s status 캐시. Codex perf 판정 보고 필요시 on-demand로 분리.
 
+## 🖥️ 사용자 요청 시각 QA (브라우저 직접 확인) · 버그 2건 발견·수정
+
+루프 중 검증이 pytest/smoke/API/Codex 위주였고 **화면 직접 확인이 빠졌음** → 사용자 지적으로 브라우저 실측. 테스트/엔드포인트는 "통과"였으나 **실제 UI 버그 2건**:
+1. **A3 배지 버그**: chatgpt_pro_manual_strategist·openai-strategy-advisor-api 등 새 route가 `호출 대기 / 호출 대기`(이중 배지). 원인 = `build_adapter_health`가 새 route엔 manual/auto 필드 미제공 → 프론트 fallback. **수정**: renderProviderRouting이 `health.x ?? route.x`로 route config(auto_spawn/manual_surface_available) fallback. → Pro 카드 **"수동 전용"** 정상 표시 확인.
+2. **M5 커맨드 띠 빈 채로 표시**: renderCommandStrip이 status-hash 안 바뀐 refresh에서 스킵돼 첫 렌더 누락 가능. **수정**: hash 조건 밖에서 매 refresh 무조건 렌더(싸고 idempotent). → 띠에 `단계/경로/막힘/정제/다음` 정상 표시 확인(스크린샷).
+
+**검증:** ✅ 브라우저 시각 확인 — Pro 배지 "수동 전용", 커맨드 띠 채워짐, B1 동적버전 자동 반영(`c6cdcc995056`, 서버 재시작·수동 bump 0). frontend-only(app.js) 변경이라 pytest 35 불변.
+**교훈:** 백엔드 테스트 green ≠ UI OK. UI surface 추가 시 브라우저 시각 QA 필수.
+
 ## A6 (atomic write) + A7 (regression test) + B1 (동적 캐시버전) · ✅ 완료·검증
 
 **A6:** `write_json_atomic`(temp 동일디렉토리+flush+fsync+os.replace), `write_json`이 위임 → 모든 caller atomic. per-run lock infra(`run_write_lock`) 제공(call site 소급은 점진).

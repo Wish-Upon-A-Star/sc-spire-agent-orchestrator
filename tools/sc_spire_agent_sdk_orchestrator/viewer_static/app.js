@@ -571,12 +571,14 @@ async function refreshLiveStatus() {
       if (document.activeElement !== el.messageText) {
         renderQueueStatus(queueStatus);
       }
-      renderCommandStrip(queueStatus);
       renderWorkBoard(queueStatus);
       renderMilestones(queueStatus);
       renderKnowledgeHub(queueStatus);
       renderPreflightBanner(queueStatus?.live_preflight);
     }
+    // Always refresh the command strip (cheap, idempotent) so it is never left
+    // blank when the status hash happened to match and the block above was skipped.
+    renderCommandStrip(queueStatus);
     const mode = queueStatus?.queue_processor?.autorun ? t.queueAutorunOn : t.queueAutorunOff;
     el.liveStatus.textContent = `${mode} ${new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
     el.liveStatus.className = "live-status";
@@ -2054,9 +2056,11 @@ function renderProviderRouting(config, adapterHealth = {}) {
           const route = config.routes[name] || {};
           const enabled = route.enabled !== false;
           const health = adapterHealth[name] || {};
-          const callable = Boolean(health.callable);
-          const autoSpawn = Boolean(health.auto_spawn_available);
-          const manualSurface = Boolean(health.manual_surface_available);
+          // Fall back to the route config when adapter_health lacks the split
+          // fields (e.g. manual lanes like chatgpt_pro / openai-strategy-api).
+          const autoSpawn = Boolean(health.auto_spawn_available ?? route.auto_spawn);
+          const manualSurface = Boolean(health.manual_surface_available ?? route.manual_surface_available);
+          const callable = Boolean(health.callable ?? (autoSpawn || manualSurface));
           const spawnLabel = autoSpawn ? "자동 가능" : manualSurface ? "수동 전용" : "호출 대기";
           const spawnClass = autoSpawn ? "enabled" : manualSurface ? "manual" : "disabled";
           const model = route.default_model || route.effective_model || "";
