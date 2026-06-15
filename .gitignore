@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+.env
+*.log
+
+# Runtime state and local traces
+output/agent_orchestrator_runs/*
+!output/agent_orchestrator_runs/.gitkeep
+memory/issues_log/*
+!memory/issues_log/.gitkeep
+
+# Local OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

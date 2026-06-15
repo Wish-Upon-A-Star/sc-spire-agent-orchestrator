@@ -1,0 +1,21 @@
+{
+  "goal_id": "web-ui-browser-gate-sample",
+  "user_request": "웹 UI 템플릿을 수정할 때 브라우저 증거를 요구한다.",
+  "blocker_id": null,
+  "work_type": "player_facing_web",
+  "affected_surfaces": [
+    "web UI",
+    "browser verification"
+  ],
+  "planned_files": [
+    "templates/game_run.html",
+    "static/css/game-panels.css"
+  ],
+  "acceptance_criteria": [
+    "Unity license preflight 없이 web player-facing으로 분류된다.",
+    "브라우저 또는 Playwright 증거가 필수 증거로 포함된다."
+  ],
+  "non_goals": [
+    "Unity player-facing 파일을 수정하지 않는다."
+  ]
+}

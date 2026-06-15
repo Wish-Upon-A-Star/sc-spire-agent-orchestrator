@@ -1,0 +1,261 @@
+{
+  "version": 2,
+  "default_route": "codex_subscription_worker",
+  "cost_policy": {
+    "primary_budget": "subscription_max",
+    "api_budget_limit_usd": 100,
+    "rule": "Prefer non-API subscription surfaces for most work. Use OpenAI API only for small structured preflight, guardrail, trace, or fallback tasks."
+  },
+  "routes": {
+    "agents_sdk_pattern_local": {
+      "enabled": true,
+      "priority": 0,
+      "provider": "openai",
+      "billing": "non_api_pattern_adoption",
+      "surface": "local_agents_sdk_contract_no_model_call",
+      "default_model": "none",
+      "fallback_model": "codex_subscription_worker",
+      "best_for": [
+        "Agent identity contract",
+        "handoff routing contract",
+        "guardrail checklist construction",
+        "trace and result artifact shape",
+        "prompt preflight normalization without API spend",
+        "deciding whether an optional live SDK call is justified"
+      ],
+      "avoid_for": [
+        "model reasoning by itself",
+        "claiming live OpenAI SDK execution happened",
+        "spending API budget without an explicit budget gate"
+      ],
+      "override_env": {
+        "enabled": "SC_SPIRE_AGENTS_SDK_PATTERN_ENABLED"
+      }
+    },
+    "codex_subscription_worker": {
+      "enabled": true,
+      "priority": 1,
+      "provider": "openai",
+      "billing": "codex_subscription_max",
+      "surface": "codex_cli_or_app_logged_in_session_non_api",
+      "default_model": "codex-cli-subscription-default",
+      "fallback_model": "current-codex-app-session",
+      "best_for": [
+        "main implementation work",
+        "local repo inspection",
+        "file edits",
+        "test commands",
+        "browser verification",
+        "screenshot evidence",
+        "evidence packaging",
+        "most supervisor execution when local tools are needed"
+      ],
+      "avoid_for": [
+        "independent cross-model critique",
+        "durable orchestration memory without saved transcripts"
+      ],
+      "override_env": {
+        "model": "SC_SPIRE_CODEX_WORKER_MODEL",
+        "enabled": "SC_SPIRE_CODEX_WORKER_ENABLED"
+      }
+    },
+    "claude_collaborator": {
+      "enabled": true,
+      "priority": 2,
+      "provider": "anthropic",
+      "billing": "claude_max_subscription",
+      "surface": "local_claude_cli_or_subscription_adapter_non_api",
+      "default_model": "claude-opus-max-reviewer",
+      "fallback_model": "claude-sonnet-max-reviewer",
+      "timeout_seconds": 900,
+      "best_for": [
+        "main planning critique",
+        "product/design challenge",
+        "plan gate review",
+        "closure gate review",
+        "weak assumption detection",
+        "second-opinion review after Codex work"
+      ],
+      "avoid_for": [
+        "silent final authority over SC Spire closure",
+        "local file edits without Codex evidence"
+      ],
+      "override_env": {
+        "model": "SC_SPIRE_CLAUDE_REVIEW_MODEL",
+        "enabled": "SC_SPIRE_CLAUDE_REVIEW_ENABLED",
+        "timeout_seconds": "SC_SPIRE_CLAUDE_TIMEOUT"
+      }
+    },
+    "openai_agents_sdk": {
+      "enabled": true,
+      "priority": 3,
+      "provider": "openai",
+      "billing": "api_budget_limited",
+      "surface": "api_agents_sdk_limited",
+      "default_model": "gpt-5.5",
+      "fallback_model": "gpt-5.4",
+      "budget_guard": {
+        "monthly_limit_usd": 100,
+        "default_allowed": false,
+        "allowed_for": [
+          "prompt preflight",
+          "structured JSON conversion",
+          "guardrail checks",
+          "small trace/eval records",
+          "fallback when subscription CLI is unavailable"
+        ]
+      },
+      "best_for": [
+        "small prompt preflight",
+        "structured outputs",
+        "guardrails",
+        "trace/eval-ready metadata"
+      ],
+      "avoid_for": [
+        "main orchestration by default",
+        "large implementation loops",
+        "direct local file edits",
+        "long review loops when subscription routes are available"
+      ],
+      "override_env": {
+        "model": "SC_SPIRE_OPENAI_ORCHESTRATOR_MODEL",
+        "enabled": "SC_SPIRE_OPENAI_ORCHESTRATOR_ENABLED"
+      }
+    },
+    "gemini_collaborator": {
+      "enabled": false,
+      "priority": 4,
+      "provider": "google",
+      "billing": "gemini_api_or_google_subscription_pending_key",
+      "surface": "gemini_cli_or_api_pending_key",
+      "default_model": "gemini-3-pro",
+      "fallback_model": "gemini-2.5-pro",
+      "best_for": [
+        "third-opinion critique",
+        "alternative plan review",
+        "long-context product sanity check"
+      ],
+      "avoid_for": [
+        "use before Gemini key/login is configured",
+        "local file edits without Codex evidence"
+      ],
+      "override_env": {
+        "api_key": "GEMINI_API_KEY",
+        "model": "SC_SPIRE_GEMINI_MODEL",
+        "enabled": "SC_SPIRE_GEMINI_ENABLED"
+      }
+    }
+  },
+  "role_defaults": {
+    "supervisor-agent": "codex_subscription_worker",
+    "intake-agent": "codex_subscription_worker",
+    "issue-memory-agent": "codex_subscription_worker",
+    "prompt-preflight-agent": "agents_sdk_pattern_local",
+    "claude-decision-advisor": "claude_collaborator",
+    "openai-codex-api-advisor": "openai_agents_sdk",
+    "product-critic-agent": "claude_collaborator",
+    "claude-reviewer": "claude_collaborator",
+    "codex-worker": "codex_subscription_worker",
+    "validator-code-level": "codex_subscription_worker",
+    "validator-runtime-behavior-level": "codex_subscription_worker",
+    "validator-ovv-product-level": "claude_collaborator",
+    "gemini-reviewer": "gemini_collaborator",
+    "final-reporter-agent": "codex_subscription_worker"
+  },
+  "collaboration_memory_policy": {
+    "shared_artifacts": [
+      "output/agent_orchestrator_runs/operator_message_events.jsonl",
+      "output/agent_orchestrator_runs/<run_id>/transcript.jsonl",
+      "output/agent_orchestrator_runs/<run_id>/transcript.md",
+      "memory/issues_log/*.md"
+    ],
+    "before_any_worker": [
+      "read current assignment",
+      "read provider routing",
+      "scan unresolved/recent issue memory",
+      "load relevant transcript context",
+      "convert repeated mistakes into acceptance gates"
+    ],
+    "after_any_failure": [
+      "log issue before retry",
+      "write failure, suspected cause, attempted fix, and prevention rule to transcript",
+      "inject the prevention rule into the next worker or reviewer prompt"
+    ],
+    "cross_model_rule": "Codex and Claude must see recent issue memory and each other's recorded critique before repeating the same surface. A known mistake is not allowed to be rediscovered silently by another route."
+  },
+  "decision_rules": [
+    {
+      "when": "every_main_orchestrator_decision_before_worker_dispatch",
+      "prefer": "main_orchestrator_plus_claude_decision_advisor_plus_openai_codex_api_advisor",
+      "reason": "Keep one final main orchestrator, but force two advisory viewpoints: Claude MAX for critique and OpenAI Agents SDK/API for structured guardrail/routing judgment. If a live advisor is unavailable, record the blocker instead of silently skipping it."
+    },
+    {
+      "when": "queued_operator_message_may_modify_current_goal_or_priority",
+      "prefer": "queue_steering_decision_before_fifo_execution",
+      "reason": "The main orchestrator must decide whether the message is a new sequential work item or a steering intervention that should attach to the current run."
+    },
+    {
+      "when": "any_non_trivial_orchestrated_work",
+      "prefer": "agents_sdk_pattern_local_plus_codex_subscription_worker_plus_claude_collaborator",
+      "reason": "Even when the operator does not name Agent SDK or Claude, the main orchestrator must apply the Agents SDK pattern for identities/handoffs/guardrails/traces and must queue Claude MAX validation for plan, evidence, and closure critique."
+    },
+    {
+      "when": "most_main_orchestration_or_implementation",
+      "prefer": "codex_subscription_worker",
+      "reason": "Use the MAX subscription path first to avoid spending the limited OpenAI API budget."
+    },
+    {
+      "when": "product_design_plan_or_closure_challenge",
+      "prefer": "claude_collaborator",
+      "reason": "Use Claude MAX as the independent collaborator and main critique route."
+    },
+    {
+      "when": "prompt_intake_or_refinement_needs_structured_json",
+      "prefer": "agents_sdk_pattern_local_then_optional_openai_agents_sdk",
+      "reason": "Apply the Agents SDK preflight/guardrail/trace pattern first; use a small API call only when the local preflight cannot produce a reliable structured packet."
+    },
+    {
+      "when": "unity_player_facing_score_or_closure",
+      "prefer": "codex_subscription_worker_plus_claude_collaborator_with_optional_openai_api_preflight",
+      "reason": "Require local rendered evidence and independent Claude critique; keep API use optional and small."
+    }
+  ],
+  "main_orchestrator_override_contract": {
+    "allowed": true,
+    "must_record": [
+      "previous_route",
+      "new_route",
+      "previous_model",
+      "new_model",
+      "billing_change",
+      "reason",
+      "scope",
+      "timestamp"
+    ],
+    "forbidden_without_user_or_gate": [
+      "using OpenAI API as the default route for broad work",
+      "disabling rendered evidence for player-facing work",
+      "making Claude the sole closure authority",
+      "routing local file edits to API-only agents without Codex worker evidence",
+      "starting a worker without recent issue-memory scan"
+    ]
+  },
+  "quota_visibility": {
+    "openai_api": {
+      "label": "OpenAI API usage and limits",
+      "url": "https://platform.openai.com/usage"
+    },
+    "claude_subscription": {
+      "label": "Claude usage limits help",
+      "url": "https://support.claude.com/en/articles/11647753-how-do-usage-and-length-limits-work"
+    },
+    "gemini_api": {
+      "label": "Gemini API rate limits",
+      "url": "https://ai.google.dev/gemini-api/docs/rate-limits"
+    },
+    "gemini_billing": {
+      "label": "Gemini API billing",
+      "url": "https://ai.google.dev/gemini-api/docs/billing"
+    }
+  }
+}

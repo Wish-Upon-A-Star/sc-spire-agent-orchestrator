@@ -1,0 +1,23 @@
+{
+  "goal_id": "unity-ui-ovv-gate-sample",
+  "user_request": "Unity UI 파일을 수정할 때 OVV와 렌더 증거를 요구한다.",
+  "blocker_id": "WEB-PARITY-RUN-DEPTH-1",
+  "work_type": "player_facing_unity",
+  "affected_surfaces": [
+    "Unity UI",
+    "OVV",
+    "rendered evidence"
+  ],
+  "planned_files": [
+    "Unity/Assets/SCSpire/UI/RunMapView.uxml",
+    "Unity/Assets/SCSpire/UI/RunMapView.uss"
+  ],
+  "acceptance_criteria": [
+    "Unity player-facing으로 분류된다.",
+    "운영 상태 검증, OVV decision packet, Unity license preflight가 pre-edit command에 포함된다.",
+    "렌더 스크린샷 증거가 필수 증거로 포함된다."
+  ],
+  "non_goals": [
+    "이번 샘플은 실제 Unity 파일을 수정하지 않는다."
+  ]
+}

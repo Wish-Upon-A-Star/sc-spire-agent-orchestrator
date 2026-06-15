@@ -1,0 +1,4 @@
+# Dry-run mode uses only the Python standard library.
+# Optional live SDK adapter. The dashboard must still run if this package
+# cannot be imported by the current Python runtime.
+openai-agents==0.14.8

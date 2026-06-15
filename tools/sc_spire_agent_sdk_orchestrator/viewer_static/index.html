@@ -1,0 +1,167 @@
+﻿<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SC Spire 에이전트 실행 기록</title>
+    <link rel="stylesheet" href="/styles.css?v=20260613-visual-ops-v1" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="runs-pane">
+        <header class="pane-header">
+          <div>
+            <p class="eyebrow">SC Spire</p>
+            <h1 id="runs-heading">에이전트 실행</h1>
+          </div>
+          <button id="refresh-runs" type="button">새로고침</button>
+        </header>
+        <div id="runs" class="runs-list"></div>
+      </aside>
+
+      <main class="timeline-pane">
+        <header class="run-header">
+          <div>
+            <p id="run-id" class="eyebrow">선택한 실행 없음</p>
+            <h2 id="run-title">실행 기록</h2>
+          </div>
+          <div id="run-meta" class="run-meta"></div>
+        </header>
+
+        <section class="guide" aria-labelledby="guide-title">
+          <div class="guide-copy">
+            <p id="guide-kicker" class="eyebrow"></p>
+            <h3 id="guide-title"></h3>
+            <p id="guide-body"></p>
+          </div>
+          <ol id="guide-steps" class="guide-steps"></ol>
+          <div id="game-workflow" class="workflow"></div>
+        </section>
+
+        <nav class="main-tabs" aria-label="실행 보기 전환">
+          <button class="tab-button active" type="button" data-tab-target="status">상태</button>
+          <button class="tab-button" type="button" data-tab-target="conversation">작업자 대화</button>
+          <button class="tab-button" type="button" data-tab-target="milestones">마일스톤</button>
+          <button class="tab-button" type="button" data-tab-target="knowledge">이슈/공유정보</button>
+          <button class="tab-button" type="button" data-tab-target="records">실행 기록</button>
+          <button class="tab-button" type="button" data-tab-target="routing">라우팅/규칙</button>
+        </nav>
+
+        <section class="tab-panel active" data-tab-panel="status">
+          <section id="work-board" class="work-board"></section>
+        </section>
+        <section class="tab-panel" data-tab-panel="conversation">
+          <section id="agent-conversation" class="discord-conversation"></section>
+        </section>
+        <section class="tab-panel" data-tab-panel="milestones">
+          <section id="milestones" class="milestones"></section>
+        </section>
+        <section class="tab-panel" data-tab-panel="knowledge">
+          <section id="knowledge-hub" class="knowledge-hub"></section>
+        </section>
+        <section class="tab-panel" data-tab-panel="records">
+          <details open data-details-key="transcript-details" class="collapsible-section transcript-details">
+            <summary>선택한 실행 기록</summary>
+            <section id="run-summary" class="run-summary"></section>
+            <section id="timeline" class="timeline"></section>
+          </details>
+        </section>
+        <section class="tab-panel" data-tab-panel="routing">
+          <section id="provider-routing" class="provider-routing"></section>
+        </section>
+      </main>
+
+      <aside class="inspector-pane">
+        <header class="pane-header">
+          <div>
+            <p id="inspector-kicker" class="eyebrow">검사기</p>
+            <h2 id="inspector-heading">운영 입력</h2>
+          </div>
+        </header>
+        <section class="operator-box">
+          <details open data-details-key="live-queue" class="collapsible-section">
+            <summary>메시지 넣기</summary>
+          <div id="preflight-banner" class="preflight-banner" hidden></div>
+          <label class="preflight-toggle">
+            <input id="toggle-live-preflight" type="checkbox" />
+            <span>라이브 LLM 정제</span>
+          </label>
+          <p id="operator-heading" class="eyebrow">운영자 메시지</p>
+          <label>
+              <span id="target-label">대상</span>
+            <select id="message-target">
+              <option id="target-main" value="prompt-preflight-agent">프롬프트 사전 검증</option>
+              <option id="target-html" value="html">뷰어 메모</option>
+              <option id="target-thread" value="thread">스레드 큐</option>
+            </select>
+          </label>
+          <label>
+            <span id="thread-label">스레드 ID</span>
+            <input id="message-thread" type="text" placeholder="선택 사항" />
+          </label>
+          <textarea id="message-text" rows="5" placeholder="메인 오케스트레이터에게 보낼 메시지"></textarea>
+          <button id="send-message" type="button">사전 검증 후 큐에 넣기</button>
+          <p id="message-status" class="message-status"></p>
+          <section id="prompt-preview" class="prompt-preview" hidden></section>
+          </details>
+        </section>
+        <section class="queue-box" aria-labelledby="queue-heading">
+          <details open data-details-key="operator-message" class="collapsible-section">
+            <summary>실시간 큐</summary>
+          <div class="queue-title-row">
+            <p id="queue-heading" class="eyebrow">실시간 큐</p>
+            <button id="process-next" class="queue-mini-button" type="button">다음 처리</button>
+            <button id="cancel-all" class="queue-mini-button danger" type="button">전체 취소</button>
+            <button id="toggle-trash" class="queue-mini-button" type="button">휴지통</button>
+            <span id="live-status" class="live-status">실시간</span>
+          </div>
+          <div id="queue-status-list" class="queue-status-list"></div>
+          </details>
+        </section>
+        <section class="operator-box inspector-tool">
+          <details data-details-key="event-inspector" class="collapsible-section">
+            <summary>선택 이벤트 상세</summary>
+            <section id="inspector" class="inspector-empty">이벤트를 선택하세요.</section>
+          </details>
+        </section>
+        <section class="operator-box">
+          <details data-details-key="run-result" class="collapsible-section">
+            <summary>작업자/검토 결과 기록</summary>
+            <p id="result-heading" class="eyebrow">실행 결과</p>
+            <label>
+              <span id="result-type-label">결과 유형</span>
+              <select id="result-type">
+                <option value="worker">작업자 결과</option>
+                <option value="validator">검증 결과</option>
+                <option value="claude_review">Claude 검토</option>
+                <option value="product_review">제품 검토</option>
+              </select>
+            </label>
+            <label>
+              <span id="result-role-label">역할</span>
+              <input id="result-role" type="text" placeholder="codex-worker" />
+            </label>
+            <label>
+              <span id="result-status-label">상태</span>
+              <select id="result-status">
+                <option value="submitted">submitted</option>
+                <option value="passed">passed</option>
+                <option value="needs_retry">needs_retry</option>
+                <option value="blocked">blocked</option>
+              </select>
+            </label>
+            <textarea id="result-summary" rows="4" placeholder="결과 요약"></textarea>
+            <textarea id="result-evidence" rows="3" placeholder="증거/명령/파일을 줄 단위로 입력"></textarea>
+            <textarea id="result-risks" rows="3" placeholder="남은 리스크를 줄 단위로 입력"></textarea>
+            <button id="advance-run" type="button">선택 실행 다음 단계 진행</button>
+            <button id="run-claude-review" type="button">Claude 검토 실행</button>
+            <button id="record-e2e" type="button">화면 E2E 검증 기록</button>
+            <button id="submit-result" type="button">결과 기록</button>
+            <p id="result-status-message" class="message-status"></p>
+          </details>
+        </section>
+      </aside>
+    </div>
+    <script src="/app.js?v=20260613-visual-ops-v1"></script>
+  </body>
+</html>

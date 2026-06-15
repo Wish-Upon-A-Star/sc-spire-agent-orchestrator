@@ -1,0 +1,28 @@
+{
+  "goal_id": "web-parity-run-depth-agent-sdk-mvp",
+  "user_request": "Agent SDK orchestrator 방식으로 SC Spire 작업을 처음부터 통제한다.",
+  "blocker_id": "WEB-PARITY-RUN-DEPTH-1",
+  "work_type": "source_process",
+  "affected_surfaces": [
+    "orchestration",
+    "OVV",
+    "Codex worker routing",
+    "review gates"
+  ],
+  "planned_files": [
+    "docs/systems/sc-spire-agent-sdk-ovv-orchestrator.md",
+    "tools/sc_spire_agent_sdk_orchestrator/README.md",
+    "tools/sc_spire_agent_sdk_orchestrator/sc_spire_ovv_orchestrator.py"
+  ],
+  "acceptance_criteria": [
+    "PRD, 작업 분해, Review Gate가 생성된다.",
+    "플레이어 표시 Unity 작업은 렌더 증거 없이 종료할 수 없다.",
+    "Codex worker는 Agent SDK 오케스트레이터 아래에서만 실행되도록 설계된다.",
+    "dry-run은 OpenAI API 키 없이 실행된다."
+  ],
+  "non_goals": [
+    "이번 단계에서 Discord 운영계를 교체하지 않는다.",
+    "이번 단계에서 Unity player-facing 파일을 수정하지 않는다.",
+    "이번 단계에서 제품 품질 점수를 변경하지 않는다."
+  ]
+}
