@@ -174,6 +174,15 @@ route `chatgpt_pro_manual_strategist`(auto_spawn:false, manual surface) + person
 - ✅ 나 직접: pytest **31 passed** / smoke `{"ok":true}` / ledger 엔드포인트 200 / A1 회귀X / zero-dep
 - ✅ Codex: problems 2건 → #1 **B2 슬롯 누수**(send_response가 claim과 try 사이 → 헤더전송 예외 시 슬롯 영구누수) → **send_response를 try 안으로 이동**(finally 항상 해제). #2 read_budget_ledger 비-dict 행 통과 → **isinstance(dict) 필터**. 둘 다 수정. 나머지(503 클린·슬롯 atomic·trace 키 안전·read-only)는 sound.
 
+## A12 (issue-memory→eval) + L3 (openai-strategy-api) + L4 (lane 규격) · ✅ 구현·검증중
+
+**A12:** `load_issue_regression_seeds()`(issues_log/*.md를 `### ` 헤딩 기준 split, tolerant) + `issue_regression_report()`(count/with_countermeasure/seeds cap50) + `GET /api/issue-evals` + status 노출. 향후 parametrized regression pytest seed.
+**L3:** `openai-strategy-advisor-api` route + `call_openai_strategy_review`(light/normal/closure·needs_gpt_pro·lens·block_closure 짧은 JSON; preflight처럼 게이트, 아니면 deterministic local_rule fallback·무네트워크) + `POST /api/run/strategy-review`(strategy-review.json, ledger+provenance).
+**L4:** `lane_descriptor()`/`build_lanes()`(codex/claude/openai-api/gpt-pro 통일 규격: A3 callable + A2 provenance + E4 output_schema) → status `lanes` 4개. Claude quick-objection/closure-review 프롬프트 분리.
+
+**검증:** ✅ 나 직접 pytest **35**(34+1skip) / smoke `{"ok":true}` / issue-evals 200·lanes 4·strategy-review local fallback 동작 / A1 회귀X / zero-dep. Codex 리뷰 진행중.
+- 관측: `issue_regression.count=36968`(로그가 방대 — `### ` 헤딩 실제 다수). seeds는 50 cap이라 payload bounded, 2s status 캐시. Codex perf 판정 보고 필요시 on-demand로 분리.
+
 ## A6 (atomic write) + A7 (regression test) + B1 (동적 캐시버전) · ✅ 완료·검증
 
 **A6:** `write_json_atomic`(temp 동일디렉토리+flush+fsync+os.replace), `write_json`이 위임 → 모든 caller atomic. per-run lock infra(`run_write_lock`) 제공(call site 소급은 점진).

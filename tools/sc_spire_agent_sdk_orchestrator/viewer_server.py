@@ -861,6 +861,100 @@ def summarize_run_context(run_id: str) -> dict[str, object]:
     }
 
 
+# A12 issue-memory -> eval seed -> pytest -----------------------------------
+
+ISSUE_REGRESSION_LOG_DIR = REPO_ROOT / "memory" / "issues_log"
+# Markers that indicate a recorded countermeasure / resolution exists for an
+# issue entry. Best-effort substring match (case-insensitive) over the entry body.
+ISSUE_COUNTERMEASURE_MARKERS = (
+    "해결",
+    "교훈",
+    "재발 시",
+    "resolved",
+    "countermeasure",
+    "prevention",
+    "fix:",
+)
+
+
+def _split_issue_entries(text: str) -> list[tuple[str, str]]:
+    """Best-effort split of an issues_log markdown file into (title, body) entries.
+
+    Tolerant: prefers `### ` headings; if none are present, returns a single
+    pseudo-entry for the whole file so the file is still counted. Never raises.
+    """
+    entries: list[tuple[str, str]] = []
+    current_title: str | None = None
+    current_lines: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("### "):
+            if current_title is not None:
+                entries.append((current_title, "\n".join(current_lines)))
+            current_title = line[4:].strip()
+            current_lines = []
+        elif current_title is not None:
+            current_lines.append(line)
+    if current_title is not None:
+        entries.append((current_title, "\n".join(current_lines)))
+    return entries
+
+
+def load_issue_regression_seeds() -> list[dict[str, object]]:
+    """A12: scan memory/issues_log/*.md and extract regression seeds.
+
+    Each seed is ``{"id", "title", "source_file", "countermeasure_present"}``.
+    These seeds are the basis for FUTURE parametrized pytest regression tests
+    (one binary "this past failure does not recur" check per seed); this MVP only
+    extracts and reports them. Parsing is tolerant and NEVER raises — any error
+    (missing dir, unreadable file, bad encoding) yields ``[]`` or skips the file.
+    """
+    seeds: list[dict[str, object]] = []
+    try:
+        directory = ISSUE_REGRESSION_LOG_DIR
+        if not directory.exists() or not directory.is_dir():
+            return []
+        for path in sorted(directory.glob("*.md")):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            entries = _split_issue_entries(text)
+            for index, (title, body) in enumerate(entries):
+                # Match countermeasure markers against the BODY only. Matching the
+                # title would false-positive on words like "미해결" (unresolved),
+                # which contains the substring "해결" (resolved).
+                blob = body.lower()
+                countermeasure = any(
+                    marker.lower() in blob for marker in ISSUE_COUNTERMEASURE_MARKERS
+                )
+                seeds.append(
+                    {
+                        "id": f"{path.stem}#{index}",
+                        "title": title[:200],
+                        "source_file": path.name,
+                        "countermeasure_present": bool(countermeasure),
+                    }
+                )
+    except Exception:
+        return []
+    return seeds
+
+
+def issue_regression_report() -> dict[str, object]:
+    """A12: summary of issue regression seeds (read-only; safe on GET).
+
+    ``seeds`` is capped at 50 entries; ``count`` / ``with_countermeasure`` reflect
+    the full extracted set.
+    """
+    seeds = load_issue_regression_seeds()
+    with_countermeasure = sum(1 for s in seeds if s.get("countermeasure_present"))
+    return {
+        "count": len(seeds),
+        "with_countermeasure": with_countermeasure,
+        "seeds": seeds[:50],
+    }
+
+
 # L2 GPT Pro manual strategist lane ------------------------------------------
 
 GPT_PRO_REQUEST_ARTIFACT = "gpt-pro-review-request.md"
@@ -1085,6 +1179,221 @@ def record_gpt_pro_result(payload: dict[str, object]) -> dict[str, object]:
         "schema_valid": record.get("schema_valid"),
         "verdict": record.get("verdict"),
         "waiting_for_operator": False,
+    }
+
+
+# L3 openai-strategy-advisor-api (auto small structured judgment) -------------
+
+STRATEGY_REVIEW_ARTIFACT = "strategy-review.json"
+STRATEGY_REVIEW_ROUTE = "openai-strategy-advisor-api"
+STRATEGY_REVIEW_DEFAULT_MODEL = "gpt-5.5"
+STRATEGY_RUN_MODES = ("light", "normal", "closure")
+# Evidence whose absence means closure should be blocked in the local fallback.
+STRATEGY_REQUIRED_EVIDENCE = ("worker-result.json", "validator-result.json")
+
+
+def _strategy_run_mode_from_weight(run_dir: Path) -> str:
+    """Map the run's request_weight to a strategy run_mode (light|normal)."""
+    capsule_mode = _run_capsule_mode(run_dir)  # "light" | "normal"
+    return capsule_mode if capsule_mode in STRATEGY_RUN_MODES else "normal"
+
+
+def build_strategy_review_instruction(run_id: str, capsule: dict[str, object]) -> str:
+    """Compact instruction asking for a small JSON strategy decision (L3)."""
+    task = capsule.get("task") if isinstance(capsule.get("task"), dict) else {}
+    raw = str(task.get("raw", "")).strip()
+    refined = str(task.get("refined", "")).strip()
+    mode = str(task.get("mode", "")).strip()
+    missing = capsule.get("missing_evidence") if isinstance(capsule.get("missing_evidence"), list) else []
+    artifacts = capsule.get("current_artifacts") if isinstance(capsule.get("current_artifacts"), list) else []
+    names = [str(a.get("name", "")) for a in artifacts if isinstance(a, dict)]
+    return json.dumps(
+        {
+            "task": "Make a small structured run-strategy decision for an SC Spire orchestrator run.",
+            "run_id": run_id,
+            "current_mode": mode or "normal",
+            "operator_request": raw[:600],
+            "refined_task": refined[:800],
+            "artifacts_present": names[:30],
+            "missing_evidence": [str(m) for m in missing][:10],
+            "decide": [
+                "run_mode: light | normal | closure",
+                "needs_gpt_pro: should slow manual GPT-Pro review be requested?",
+                "review_lenses: which lenses to run",
+                "block_closure: must closure be blocked (missing evidence)?",
+            ],
+            "output_schema": {
+                "run_mode": "light|normal|closure",
+                "needs_gpt_pro": "bool",
+                "review_lenses": ["..."],
+                "block_closure": "bool",
+                "reason": "...",
+            },
+            "rules": [
+                "Return strict JSON only.",
+                "block_closure must be true if required worker/validator evidence is missing.",
+                "Keep review_lenses short.",
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+def _strategy_local_fallback(run_id: str, run_dir: Path, capsule: dict[str, object]) -> dict[str, object]:
+    """Rule-based strategy decision used when the live API is gated off (L3).
+
+    Pure local computation: no network. run_mode from request_weight, lenses from
+    the mode budget profile, block_closure if expected worker/validator evidence
+    is missing.
+    """
+    run_mode = _strategy_run_mode_from_weight(run_dir)
+    profile = budget_profile(run_mode)
+    lenses_raw = profile.get("review_lenses")
+    review_lenses = [str(x) for x in lenses_raw] if isinstance(lenses_raw, list) else []
+    missing = capsule.get("missing_evidence") if isinstance(capsule.get("missing_evidence"), list) else []
+    block_closure = any(name in set(str(m) for m in missing) for name in STRATEGY_REQUIRED_EVIDENCE)
+    return {
+        "kind": "strategy_review",
+        "run_id": run_id,
+        "run_mode": run_mode,
+        "needs_gpt_pro": False,
+        "review_lenses": review_lenses,
+        "block_closure": bool(block_closure),
+        "reason": "local_fallback",
+        "source": "local_rule",
+        "created_at": utc_timestamp(),
+        "provenance": make_provenance("local_self_check", "viewer-server"),
+    }
+
+
+def call_openai_strategy_review(
+    run_id: str, question_set: object | None = None
+) -> dict[str, object]:
+    """L3: small auto structured strategy decision for a run.
+
+    Gated EXACTLY like the live preflight: only calls the real /v1/responses when
+    ``live_preflight_enabled()`` AND an API key exists. Otherwise returns a
+    rule-based fallback (source=local_rule, no network). On a live call it records
+    the spend in the A10 budget ledger and stamps live_openai_api provenance.
+    """
+    run_dir = safe_run_dir(run_id)
+    capsule_path = run_dir / CONTEXT_CAPSULE_ARTIFACT
+    capsule: object = None
+    if capsule_path.exists():
+        try:
+            capsule = read_json_file(capsule_path)
+        except Exception:
+            capsule = None
+    if not isinstance(capsule, dict) or not capsule:
+        # Build fresh (read-only) so missing_evidence drives block_closure even
+        # before the capsule artifact has been persisted by a reconcile.
+        capsule = build_context_capsule(run_id, run_dir, mode=_run_capsule_mode(run_dir))
+
+    api_key = read_openai_api_key()
+    if not (live_preflight_enabled() and api_key):
+        return _strategy_local_fallback(run_id, run_dir, capsule)
+
+    # Live path -------------------------------------------------------------
+    model = STRATEGY_REVIEW_DEFAULT_MODEL
+    try:
+        instruction = build_strategy_review_instruction(run_id, capsule)
+        if question_set:
+            instruction = instruction + "\n\nADDITIONAL QUESTIONS:\n" + json.dumps(
+                question_set, ensure_ascii=False
+            )
+        body = {
+            "model": model,
+            "reasoning": {"effort": "low"},
+            "text": {"verbosity": "low"},
+            "input": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a small structured strategy advisor for a local SC Spire "
+                        "orchestrator. Return strict JSON only. Never include secrets."
+                    ),
+                },
+                {"role": "user", "content": instruction},
+            ],
+        }
+        request = Request(
+            RESPONSES_API_URL,
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=PROMPT_PREFLIGHT_TIMEOUT) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+        model_json = parse_model_json(extract_response_text(response_payload))
+    except Exception:
+        # Any live failure degrades to the deterministic local rule (never raise).
+        fallback = _strategy_local_fallback(run_id, run_dir, capsule)
+        fallback["reason"] = "live_failed_local_fallback"
+        return fallback
+
+    run_mode = str(model_json.get("run_mode", "")).strip()
+    if run_mode not in STRATEGY_RUN_MODES:
+        run_mode = _strategy_run_mode_from_weight(run_dir)
+    lenses_raw = model_json.get("review_lenses")
+    review_lenses = [str(x) for x in lenses_raw] if isinstance(lenses_raw, list) else []
+    record = {
+        "kind": "strategy_review",
+        "run_id": run_id,
+        "run_mode": run_mode,
+        "needs_gpt_pro": bool(model_json.get("needs_gpt_pro", False)),
+        "review_lenses": review_lenses,
+        "block_closure": bool(model_json.get("block_closure", False)),
+        "reason": str(model_json.get("reason", "") or "live_openai_api"),
+        "source": "live_openai_api",
+        "model": model,
+        "created_at": utc_timestamp(),
+        "provenance": make_provenance(
+            "live_openai_api", "viewer-server", command=f"openai_responses_api:{model}"
+        ),
+    }
+    # Light shape check (reuse the E4 validator loosely; record but do not raise).
+    ok, errors = validate_review_output(
+        {"verdict": "pass", "top_findings": [], "next_action": record["reason"]}
+    )
+    record["schema_check_ok"] = ok
+    if errors:
+        record["schema_check_notes"] = errors
+    # A10: record the live spend.
+    with contextlib.suppress(Exception):
+        append_budget_ledger(
+            run_id=run_id,
+            provider="openai",
+            model=model,
+            purpose="strategy_review",
+            budget_gate="passed",
+            reason=record["reason"],
+        )
+    return record
+
+
+def record_strategy_review(payload: dict[str, object]) -> dict[str, object]:
+    """L3: POST handler — run the strategy review and persist strategy-review.json."""
+    run_id = str(payload.get("id", "")).strip() or str(payload.get("run_id", "")).strip()
+    if not run_id:
+        raise ValueError("id is required")
+    run_dir = safe_run_dir(run_id)
+    record = call_openai_strategy_review(run_id, payload.get("question_set"))
+    write_json(run_dir / STRATEGY_REVIEW_ARTIFACT, record)
+    append_transcript_event(
+        run_dir,
+        STRATEGY_REVIEW_ROUTE,
+        "main-orchestrator",
+        "strategy_review_recorded",
+        f"전략 검토 기록 (run_mode={record.get('run_mode', '')}, source={record.get('source', '')})",
+        STRATEGY_REVIEW_ARTIFACT,
+    )
+    invalidate_status_cache()
+    return {
+        "run": run_payload(run_id),
+        "artifact": STRATEGY_REVIEW_ARTIFACT,
+        "run_mode": record.get("run_mode"),
+        "source": record.get("source"),
+        "block_closure": record.get("block_closure"),
     }
 
 
@@ -4299,6 +4608,111 @@ def build_compact_claude_review_prompt(run_dir: Path, original: str = "", refine
     )
 
 
+# L4 unified claude lane prompts ---------------------------------------------
+
+
+def _claude_prompt_context(run_dir: Path) -> tuple[str, str, list[str]]:
+    """Shared compact context (original, refined, present artifact names) for the
+    L4 Claude lane prompts. Tolerant: never raises."""
+    plan_path = run_dir / "orchestration-plan.json"
+    original = ""
+    refined = ""
+    try:
+        plan = read_json_file(plan_path) if plan_path.exists() else {}
+    except Exception:
+        plan = {}
+    if isinstance(plan, dict):
+        operator = plan.get("operator_message") if isinstance(plan.get("operator_message"), dict) else {}
+        original = str(operator.get("original_message", ""))
+        refined = str(operator.get("refined_message", ""))
+    try:
+        artifacts = sorted(item.name for item in run_dir.iterdir() if item.is_file())
+    except OSError:
+        artifacts = []
+    return original, refined, artifacts
+
+
+def build_claude_quick_objection_prompt(run_dir: Path) -> str:
+    """L4: compact Claude QUICK-OBJECTION lane prompt (everyday review).
+
+    Max 5 objections, do NOT rewrite the plan, JSON-only output (E4-ish shape).
+    """
+    original, refined, artifacts = _claude_prompt_context(run_dir)
+    artifact_lines = [f"- {name}" for name in artifacts[:30]] or ["- (none)"]
+    return "\n".join(
+        [
+            "# Claude quick-objection review (L4 lane)",
+            "",
+            "Role: independent reviewer. Raise at most 5 sharp objections to the current plan/evidence.",
+            "Hard rules:",
+            "- Do NOT rewrite or re-plan the work. Objections only.",
+            "- Max 5 objections. Each must name an artifact/file/command/missing-evidence.",
+            "- If evidence is missing, say so; do not invent it.",
+            "- Output JSON only, no prose outside the JSON.",
+            "",
+            "Operator request:",
+            original[:600],
+            "",
+            "Refined task:",
+            refined[:800],
+            "",
+            "Artifacts present:",
+            *artifact_lines,
+            "",
+            "Output (JSON only):",
+            '{"verdict":"pass|needs_retry|blocked",',
+            ' "top_findings":[{"severity":"high|medium|low","claim":"...","because":"...","required_evidence":"..."}],',
+            ' "missing_evidence":[],"do_not_repeat":[],"next_action":"..."}',
+            "Keep top_findings to at most 5 items.",
+        ]
+    )
+
+
+def build_claude_closure_review_prompt(run_dir: Path) -> str:
+    """L4: compact Claude CLOSURE-REVIEW lane prompt (near closure only).
+
+    Leading verdict token PASS / NEEDS_RETRY / BLOCKED, max 8 findings.
+    """
+    original, refined, artifacts = _claude_prompt_context(run_dir)
+    review_gate: dict[str, object] = {}
+    gate_path = run_dir / "review-gate.json"
+    if gate_path.exists():
+        try:
+            loaded = read_json_file(gate_path)
+            if isinstance(loaded, dict):
+                review_gate = loaded
+        except Exception:
+            review_gate = {}
+    artifact_lines = [f"- {name}" for name in artifacts[:30]] or ["- (none)"]
+    return "\n".join(
+        [
+            "# Claude closure review (L4 lane)",
+            "",
+            "Role: independent closure reviewer. Decide whether this run may close.",
+            "Hard rules:",
+            "- Return exactly one leading verdict token: PASS, NEEDS_RETRY, or BLOCKED.",
+            "- Max 8 findings. Every PASS must name the artifact that proves it.",
+            "- If required evidence is missing, verdict must be NEEDS_RETRY or BLOCKED.",
+            "- Do not implement or re-plan; judge only.",
+            "",
+            "Operator request:",
+            original[:600],
+            "",
+            "Refined task:",
+            refined[:800],
+            "",
+            "Artifacts present:",
+            *artifact_lines,
+            "",
+            "Review gate:",
+            f"- status: {review_gate.get('status', 'unknown')}",
+            f"- next_action: {review_gate.get('next_action', '')}",
+            "",
+            "Then give concise Korean reasons and the missing evidence (max 8 findings).",
+        ]
+    )
+
+
 def run_claude_review_for_run(payload: dict[str, object]) -> dict[str, object]:
     run_id = str(payload.get("run_id", "")).strip()
     if not run_id:
@@ -6797,6 +7211,53 @@ def build_adapter_health(sdk_status: dict[str, object] | None = None) -> dict[st
     }
 
 
+# L4 unified lane descriptors -------------------------------------------------
+
+# Maps a lane route_name to (adapter_health key, provenance source_type). Each
+# lane plugs into the same socket: capsule in, reviewer_output_v1 out (L1).
+LANE_SPECS: dict[str, tuple[str, str]] = {
+    "codex_subscription_worker": ("codex_subscription_worker", "external_codex_cli"),
+    "claude_collaborator": ("claude_collaborator", "live_claude_cli"),
+    "openai-strategy-advisor-api": ("openai_agents_sdk", "live_openai_api"),
+    "chatgpt_pro_manual_strategist": ("claude_collaborator", "external_chatgpt_pro_manual"),
+}
+# Friendly aliases so callers can pass short lane names.
+LANE_ALIASES: dict[str, str] = {
+    "codex": "codex_subscription_worker",
+    "claude": "claude_collaborator",
+    "openai-api": "openai-strategy-advisor-api",
+    "openai_api": "openai-strategy-advisor-api",
+    "gpt-pro": "chatgpt_pro_manual_strategist",
+    "gpt_pro": "chatgpt_pro_manual_strategist",
+}
+
+
+def lane_descriptor(route_name: str) -> dict[str, object]:
+    """L4: unified lane spec for a review lane.
+
+    Returns ``{"route", "callable" (A3 fields from build_adapter_health),
+    "output_schema", "provenance_source_type"}``. The gpt-pro lane maps to the
+    external_chatgpt_pro_manual provenance source.
+    """
+    canonical = LANE_ALIASES.get(route_name, route_name)
+    health_key, source_type = LANE_SPECS.get(canonical, ("", "operator_manual"))
+    adapter_health = build_adapter_health()
+    callable_fields = adapter_health.get(health_key, {}) if isinstance(adapter_health, dict) else {}
+    if not isinstance(callable_fields, dict):
+        callable_fields = {}
+    return {
+        "route": canonical,
+        "callable": callable_fields,
+        "output_schema": "reviewer_output_v1",
+        "provenance_source_type": source_type,
+    }
+
+
+def build_lanes() -> list[dict[str, object]]:
+    """L4: the unified lane list exposed in /api/status."""
+    return [lane_descriptor(route) for route in LANE_SPECS]
+
+
 def build_main_orchestrator_context(
     work_items: list[dict[str, object]],
     sdk_status: dict[str, object],
@@ -6944,6 +7405,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
                         "agent_personas": AGENT_PERSONAS,
                         "workflow_states": WORKFLOW_STATES,
                         "review_lanes": REVIEW_LANES,
+                        "lanes": build_lanes(),
+                        "issue_regression": issue_regression_report(),
                         "unity_target": unity_target_summary(),
                         "shared_workspace": build_shared_workspace(),
                         "issue_memory": build_issue_memory_summary(),
@@ -7027,6 +7490,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/provider-routing":
                 self._send_json(load_provider_routing_config())
+                return
+            if parsed.path == "/api/issue-evals":
+                # A12: read-only exposure of issue regression seeds + report.
+                self._send_json(issue_regression_report())
                 return
             if parsed.path == "/api/budget-ledger":
                 # A10: read-only exposure of the recent budget ledger (A1: GET
@@ -7113,6 +7580,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/run/claude-review":
                 self._send_json(run_claude_review_for_run(self._read_json_body()), status=201)
+                return
+            if parsed.path == "/api/run/strategy-review":
+                # L3: run the auto strategy review and persist strategy-review.json.
+                self._send_json(record_strategy_review(self._read_json_body()), status=201)
                 return
             if parsed.path == "/api/run/e2e-verification":
                 self._send_json(record_e2e_html_verification(self._read_json_body()), status=201)

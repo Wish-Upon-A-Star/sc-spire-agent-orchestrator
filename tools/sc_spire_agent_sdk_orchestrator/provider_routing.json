@@ -146,6 +146,25 @@
         "programmatic account automation"
       ]
     },
+    "openai-strategy-advisor-api": {
+      "enabled": true,
+      "priority": 3,
+      "provider": "openai",
+      "billing": "api_budget_limited",
+      "surface": "openai_responses_api",
+      "default_model": "gpt-5.5",
+      "auto_spawn": true,
+      "best_for": [
+        "run mode classification (light/normal/closure)",
+        "whether GPT-Pro manual review is needed",
+        "which review lenses to run",
+        "whether closure must be blocked"
+      ],
+      "avoid_for": [
+        "long multi-angle review",
+        "local file edits"
+      ]
+    },
     "gemini_collaborator": {
       "enabled": false,
       "priority": 4,

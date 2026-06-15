@@ -748,3 +748,96 @@ def test_render_index_injects_version():
     assert f"styles.css?v={version}" in html
     # Serve-time injection only: on-disk file untouched (A1).
     assert before == after, "render_index_html modified index.html on disk"
+
+
+def test_load_issue_regression_seeds_tolerant(monkeypatch, tmp_path):
+    # A12: the seed extractor must always return a list and never raise, even when
+    # the issues_log directory is missing or empty.
+    missing = tmp_path / "does_not_exist"
+    monkeypatch.setattr(viewer_server, "ISSUE_REGRESSION_LOG_DIR", missing)
+    assert viewer_server.load_issue_regression_seeds() == []
+
+    empty = tmp_path / "empty_issues_log"
+    empty.mkdir()
+    monkeypatch.setattr(viewer_server, "ISSUE_REGRESSION_LOG_DIR", empty)
+    seeds = viewer_server.load_issue_regression_seeds()
+    assert isinstance(seeds, list)
+    assert seeds == []
+
+    # A populated dir yields seeds with the expected shape, including a
+    # countermeasure_present flag derived from the body markers.
+    (empty / "07-sample.md").write_text(
+        "### 🟦 [2026-06-15] 샘플 이슈\n- 증상: x\n- **해결**: y\n\n"
+        "### 🟧 [2026-06-15] 미해결 이슈\n- 증상: z\n",
+        encoding="utf-8",
+    )
+    seeds = viewer_server.load_issue_regression_seeds()
+    assert len(seeds) == 2
+    for seed in seeds:
+        assert set(seed) >= {"id", "title", "source_file", "countermeasure_present"}
+        assert seed["source_file"] == "07-sample.md"
+    assert seeds[0]["countermeasure_present"] is True
+    assert seeds[1]["countermeasure_present"] is False
+
+
+def test_issue_regression_report_shape(monkeypatch, tmp_path):
+    # A12: the report exposes count/with_countermeasure/seeds and caps seeds at 50.
+    directory = tmp_path / "issues_log"
+    directory.mkdir()
+    body = "\n".join(
+        f"### 이슈 {i}\n- 증상: x\n- **해결**: ok" for i in range(60)
+    )
+    (directory / "01-many.md").write_text(body, encoding="utf-8")
+    monkeypatch.setattr(viewer_server, "ISSUE_REGRESSION_LOG_DIR", directory)
+
+    report = viewer_server.issue_regression_report()
+    assert set(report) >= {"count", "with_countermeasure", "seeds"}
+    assert report["count"] == 60
+    assert report["with_countermeasure"] == 60
+    assert isinstance(report["seeds"], list)
+    assert len(report["seeds"]) == 50  # capped
+
+
+def test_strategy_review_local_fallback(monkeypatch, tmp_path):
+    # L3: with live preflight disabled, call_openai_strategy_review must return a
+    # deterministic rule-based dict (source=local_rule) with no network/exception.
+    run_id = f"zz-test-strategy-{uuid.uuid4().hex[:12]}"
+    run_dir = viewer_server.RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        # Force the live gate off so no network call can be attempted.
+        monkeypatch.setattr(viewer_server, "LIVE_PREFLIGHT_OVERRIDE", False)
+        # Make urlopen explode if it is ever called (proves no network path).
+        def _boom(*args, **kwargs):  # pragma: no cover - must not run
+            raise AssertionError("strategy review attempted a network call")
+        monkeypatch.setattr(viewer_server, "urlopen", _boom)
+
+        # No worker/validator evidence present -> block_closure should be True.
+        record = viewer_server.call_openai_strategy_review(run_id)
+        assert isinstance(record, dict)
+        for key in ("run_mode", "needs_gpt_pro", "review_lenses", "block_closure"):
+            assert key in record
+        assert record["source"] == "local_rule"
+        assert record["run_mode"] in viewer_server.STRATEGY_RUN_MODES
+        assert record["needs_gpt_pro"] is False
+        assert isinstance(record["review_lenses"], list)
+        assert record["block_closure"] is True
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_lane_descriptor_shape():
+    # L4: lane_descriptor returns route + callable dict + output_schema; the
+    # gpt-pro lane carries the external_chatgpt_pro_manual provenance source.
+    claude = viewer_server.lane_descriptor("claude")
+    assert claude["route"] == "claude_collaborator"
+    assert isinstance(claude["callable"], dict)
+    assert claude["output_schema"] == "reviewer_output_v1"
+
+    gpt_pro = viewer_server.lane_descriptor("gpt-pro")
+    assert isinstance(gpt_pro["callable"], dict)
+    assert gpt_pro["output_schema"] == "reviewer_output_v1"
+    assert gpt_pro["provenance_source_type"] == "external_chatgpt_pro_manual"
+
+    lanes = viewer_server.build_lanes()
+    assert isinstance(lanes, list) and len(lanes) >= 4
