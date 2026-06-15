@@ -709,6 +709,64 @@ def build_review_matrix(
     return matrix
 
 
+# A9 Unity target-repo adapter -------------------------------------------------
+
+UNITY_TARGET_PATH = (
+    Path(__file__).resolve().parent / "prompt_contracts" / "unity_target.json"
+)
+
+# Inline fallback mirrors prompt_contracts/unity_target.json (A9). Used when the
+# file is missing or unreadable so the adapter is always available.
+UNITY_TARGET_FALLBACK: dict[str, object] = {
+    "contract": "unity_target",
+    "target_repo": "sc-spire-unity",
+    "project_type": "unity",
+    "root_path": "D:/hobby/sc-spire-unity",
+    "unity_version": "",
+    "entry_scenes": [],
+    "build_targets": ["Windows"],
+    "verification_commands": [],
+    "rendered_evidence_required": True,
+    "parity_sources": [
+        "original sc-spire mechanics",
+        "original assets",
+        "original UI/flow",
+    ],
+    "known_missing_systems": [],
+}
+
+
+def load_unity_target() -> dict[str, object]:
+    """Load the Unity target adapter once (A9). Falls back to the inline default
+    if the file is missing/unreadable. Read-only: no writes (A1-safe on GET)."""
+    try:
+        loaded = json.loads(UNITY_TARGET_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return dict(UNITY_TARGET_FALLBACK)
+    if not isinstance(loaded, dict):
+        return dict(UNITY_TARGET_FALLBACK)
+    # Backfill any missing required keys from the fallback so callers always see
+    # a complete adapter shape.
+    merged = dict(UNITY_TARGET_FALLBACK)
+    merged.update(loaded)
+    return merged
+
+
+def unity_target_summary() -> dict[str, object]:
+    """Compact view of the Unity target adapter for capsule/UI (A9)."""
+    target = load_unity_target()
+    return {
+        "target_repo": target.get("target_repo", ""),
+        "project_type": target.get("project_type", ""),
+        "root_path": target.get("root_path", ""),
+        "unity_version": target.get("unity_version", ""),
+        "rendered_evidence_required": bool(target.get("rendered_evidence_required", False)),
+        "build_targets": list(target.get("build_targets", []) or []),
+        "entry_scenes_count": len(target.get("entry_scenes", []) or []),
+        "known_missing_systems_count": len(target.get("known_missing_systems", []) or []),
+    }
+
+
 # E4 reviewer output schema validator -----------------------------------------
 
 REVIEW_VERDICTS = {"pass", "needs_retry", "blocked"}
@@ -1745,6 +1803,22 @@ SUGGEST_KEYWORD_MAP = {
     "한국어": ["data/localized_runtime/materialized/ko/"],
     "로케일": ["data/localized_runtime/materialized/ko/"],
     "번역": ["data/localized_runtime/materialized/ko/"],
+    # M3-Unity: Unity surface hints (additive — keep Flask/records entries above).
+    "전투": ["Assets/Scripts/SCSpire/Runtime", "Assets/Scripts/SCSpire/UI"],
+    "combat": ["Assets/Scripts/SCSpire/Runtime", "Assets/Scripts/SCSpire/UI"],
+    "전투ui": ["Assets/Scripts/SCSpire/Runtime", "Assets/Scripts/SCSpire/UI"],
+    "ui": ["Assets/Scripts/SCSpire/UI", "Assets/UI"],
+    "화면": ["Assets/Scripts/SCSpire/UI", "Assets/UI"],
+    "인터페이스": ["Assets/Scripts/SCSpire/UI", "Assets/UI"],
+    "씬": ["Assets/Scenes"],
+    "scene": ["Assets/Scenes"],
+    "프리팹": ["Assets/Prefabs"],
+    "prefab": ["Assets/Prefabs"],
+    "에디터": ["Assets/Editor"],
+    "editor": ["Assets/Editor"],
+    "유닛": ["Assets/Scripts/SCSpire/Runtime", "Assets/Prefabs"],
+    "unit": ["Assets/Scripts/SCSpire/Runtime", "Assets/Prefabs"],
+    "카드ui": ["Assets/Scripts/SCSpire/Runtime", "Assets/Prefabs"],
 }
 
 
@@ -6664,6 +6738,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                         "agent_personas": AGENT_PERSONAS,
                         "workflow_states": WORKFLOW_STATES,
                         "review_lanes": REVIEW_LANES,
+                        "unity_target": unity_target_summary(),
                         "shared_workspace": build_shared_workspace(),
                         "issue_memory": build_issue_memory_summary(),
                         "issue_import": build_issue_import_view(work_items),

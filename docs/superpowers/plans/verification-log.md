@@ -157,6 +157,14 @@ route `chatgpt_pro_manual_strategist`(auto_spawn:false, manual surface) + person
 
 **검증:** ✅ 나 직접 pytest **20 passed**(+matrix_by_mode, budget_profile_modes) / smoke `{"ok":true}` / 라이브 GET review_matrix 노출 + **새파일 0**(A1 회귀X) / budget가 capsule cap 구동 확인 / zero-dep. 추가형 config·GET try/except 가드라 직접검증으로 충분(Codex 생략).
 
+## A13 (CI) + A9 (Unity adapter) + M3-Unity · ✅ 완료·검증
+
+**A9:** `prompt_contracts/unity_target.json`(target_repo sc-spire-unity, project_type unity, root_path, rendered_evidence_required, parity_sources 등) + `load_unity_target()`/`unity_target_summary()`, `/api/status`에 unity_target 노출.
+**M3-Unity:** SUGGEST_KEYWORD_MAP에 Unity surface 16키(전투/UI/씬/프리팹/에디터/유닛 → Assets/Scripts/SCSpire/Runtime·UI, Assets/UI, Assets/Scenes, Assets/Prefabs, Assets/Editor). 기존 Flask/records 유지.
+**A13:** 로컬 `verify.py`(pytest + --smoke) + GitHub Actions `.github/workflows/ci.yml`(_sao-push 루트, push마다 pytest 자동 실행) — GPT가 지적한 "검증이 로컬뿐, CI 없음" 해소.
+
+**검증:** ✅ 나 직접 pytest **22 passed**(+load_unity_target, suggest_unity_surface) / smoke `{"ok":true}` / verify.py exit 0 / 라이브 unity_target·`suggest_targets("전투 UI 봐줘")→Assets/...` / A1 회귀X / zero-dep. CI는 push 시 GitHub Actions에서 자동 실행.
+
 ## 남은 일 (커밋 보류 상태)
 - git 커밋 전부 보류 중 (working tree에 무관 게임 WIP 995개). 사용자가 원하면 `tools/sc_spire_agent_sdk_orchestrator/` + `docs/superpowers/plans/` 만 scoped commit 가능.
 - 변경 파일: viewer_server.py, viewer_static/{app.js,index.html,styles.css}, test_viewer_units.py, smoke_test_viewer.py (+ ~/.codex/config.toml 1줄).

@@ -1,0 +1,18 @@
+{
+  "contract": "unity_target",
+  "purpose": "A9 Unity target-repo adapter. Structured description of the Unity target repository so the orchestrator routes Unity work through one declared adapter instead of hardcoded hints. load_unity_target() reads this once (inline default fallback if missing); unity_target_summary() emits a compact view for the capsule/UI. Read-only contract data; surfacing it on GET writes nothing (A1).",
+  "target_repo": "sc-spire-unity",
+  "project_type": "unity",
+  "root_path": "D:/hobby/sc-spire-unity",
+  "unity_version": "",
+  "entry_scenes": [],
+  "build_targets": ["Windows"],
+  "verification_commands": [],
+  "rendered_evidence_required": true,
+  "parity_sources": [
+    "original sc-spire mechanics",
+    "original assets",
+    "original UI/flow"
+  ],
+  "known_missing_systems": []
+}

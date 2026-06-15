@@ -34,6 +34,23 @@ def test_suggest_targets_empty_on_no_signal():
     assert viewer_server.suggest_targets("ㅇㅇ") == []
 
 
+def test_suggest_targets_unity_surface():
+    # M3-Unity: Unity surface keywords map to Assets/... paths (additive).
+    hits = viewer_server.suggest_targets("전투 UI 좀 봐줘")
+    assert isinstance(hits, list)
+    assert any(h.startswith("Assets/") for h in hits)
+    assert len(hits) <= 5
+
+
+def test_load_unity_target():
+    # A9: the Unity target adapter exposes the required keys and project_type.
+    target = viewer_server.load_unity_target()
+    assert isinstance(target, dict)
+    for key in ("target_repo", "project_type", "rendered_evidence_required"):
+        assert key in target, f"unity_target missing required key {key}"
+    assert target["project_type"] == "unity"
+
+
 def test_classify_request_weight_flags_vague():
     assert viewer_server.classify_request_weight("한번 봐줘") == "light"
     assert viewer_server.classify_request_weight("ㅇㅇ 확인") == "light"
