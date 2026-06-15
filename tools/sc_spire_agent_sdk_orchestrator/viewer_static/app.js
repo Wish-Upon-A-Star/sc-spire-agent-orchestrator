@@ -564,7 +564,10 @@ async function refreshLiveStatus() {
       state.lastStatusHash = nextStatusHash;
       renderLatestQueuedMessage(queueStatus);
       renderTargetOptions(queueStatus?.agent_targets || []);
-      renderQueueStatus(queueStatus);
+      if (document.activeElement !== el.messageText) {
+        renderQueueStatus(queueStatus);
+      }
+      renderCommandStrip(queueStatus);
       renderWorkBoard(queueStatus);
       renderMilestones(queueStatus);
       renderKnowledgeHub(queueStatus);
@@ -584,11 +587,13 @@ async function refreshLiveStatus() {
 function renderPreflightBanner(state) {
   const host = document.getElementById("preflight-banner");
   if (!host || !state) return;
-  const degraded = state.effective_mode === "template_degraded";
-  host.className = `preflight-banner ${degraded ? "warn" : "ok"}`;
-  host.textContent = degraded
-    ? "정제: 템플릿 강등 (키 있음 · 라이브 꺼짐) — 토글로 켜기"
-    : `정제: ${state.effective_mode}`;
+  const mode = state.effective_mode;
+  const warn = mode === "template_degraded" || mode === "live_requested_no_key";
+  host.className = `preflight-banner ${warn ? "warn" : "ok"}`;
+  host.textContent =
+    mode === "template_degraded" ? "정제: 템플릿 강등 (키 있음 · 라이브 꺼짐) — 토글로 켜기"
+    : mode === "live_requested_no_key" ? "정제: 라이브 요청됐으나 키 없음 — 템플릿으로 처리됨"
+    : `정제: ${mode}`;
   host.hidden = false;
 }
 
@@ -783,6 +788,31 @@ async function handleQueueAction(button, visibleMessages) {
   } finally {
     button.disabled = false;
   }
+}
+
+function renderCommandStrip(payload) {
+  const host = document.getElementById("command-strip");
+  if (!host) return;
+  const items = payload?.work_items || [];
+  const current = items.find((item) => item.status === "running") || items.find((item) => item.bucket === "active") || items[0];
+  if (!current) {
+    host.hidden = true;
+    host.innerHTML = "";
+    return;
+  }
+  const live = payload?.live_preflight?.effective_mode || "";
+  const stepText = statusLabel(current.status) || current.status || "-";
+  const routeText = current.route || "-";
+  const blocked = current.gate_status || "";
+  const blockedText = blocked || "없음";
+  const nextText = current.detail || current.title || "-";
+  host.hidden = false;
+  host.innerHTML = `
+    <span class="cs-cell"><b>단계</b> ${escapeHtml(stepText)}</span>
+    <span class="cs-cell"><b>경로</b> ${escapeHtml(routeText)}</span>
+    <span class="cs-cell ${blocked ? "warn" : ""}"><b>막힘</b> ${escapeHtml(blockedText)}</span>
+    <span class="cs-cell"><b>정제</b> ${escapeHtml(live || "-")}</span>
+    <span class="cs-cell"><b>다음</b> ${escapeHtml(nextText)}</span>`;
 }
 
 function renderWorkBoard(payload) {
@@ -2695,6 +2725,21 @@ if (el.toggleTrash) {
     renderQueueStatus(state.queueStatus || {});
   });
 }
+async function selectRunForMessage(messageId, attempts = 6) {
+  if (!messageId) return;
+  for (let i = 0; i < attempts; i += 1) {
+    const data = await fetchJson("/api/messages").catch(() => null);
+    const msg = (data?.messages || []).find((m) => m.id === messageId);
+    const runId = msg?.effective_run_id || msg?.run_id || "";
+    if (runId) {
+      await loadRun(runId);
+      setActiveTab("status");
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
+
 el.sendMessage.addEventListener("click", async () => {
   el.messageStatus.textContent = "";
   el.promptPreview.hidden = true;
@@ -2712,7 +2757,9 @@ el.sendMessage.addEventListener("click", async () => {
     };
     const data = await postJson("/api/messages", payload);
     el.messageStatus.textContent = `${t.queued}: ${data.message.id}`;
+    el.messageText.value = "";
     await refreshLiveStatus();
+    await selectRunForMessage(data.message.id);
     const preflight = data.message.prompt_preflight || {};
     const warnings = preflight.warnings || [];
     const questions = preflight.clarifying_questions || [];
@@ -2738,8 +2785,13 @@ el.sendMessage.addEventListener("click", async () => {
 
 if (el.toggleLivePreflight) {
   el.toggleLivePreflight.addEventListener("change", async () => {
-    const data = await postJson("/api/preflight/toggle", { live_enabled: el.toggleLivePreflight.checked });
-    renderPreflightBanner(data.live_preflight);
+    try {
+      const data = await postJson("/api/preflight/toggle", { live_enabled: el.toggleLivePreflight.checked });
+      renderPreflightBanner(data.live_preflight);
+    } catch (error) {
+      el.toggleLivePreflight.checked = !el.toggleLivePreflight.checked;
+      if (el.messageStatus) el.messageStatus.textContent = error.message;
+    }
   });
 }
 
@@ -2942,4 +2994,22 @@ setStaticText();
 loadRuns().catch((error) => {
   el.runs.innerHTML = `<p class="inspector-empty">${escapeHtml(error.message)}</p>`;
 });
-state.statusTimer = window.setInterval(refreshLiveStatus, 3000);
+function startLiveStream() {
+  try {
+    if (state.eventSource) { try { state.eventSource.close(); } catch (_) {} }
+    const source = new EventSource("/api/events");
+    source.addEventListener("status", () => { refreshLiveStatus(); });
+    source.onerror = () => {
+      source.close();
+      if (!state.sseReconnectTimer) {
+        state.sseReconnectTimer = window.setTimeout(() => { state.sseReconnectTimer = null; startLiveStream(); }, 5000);
+      }
+    };
+    state.eventSource = source;
+  } catch (_) {
+    if (!state.statusTimer) state.statusTimer = window.setInterval(refreshLiveStatus, 3000);
+  }
+}
+refreshLiveStatus();
+startLiveStream();
+if (!state.backupPollTimer) state.backupPollTimer = window.setInterval(refreshLiveStatus, 15000);

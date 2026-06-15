@@ -3035,3 +3035,6 @@ h2 {
 .preflight-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .pf-badge { display: inline-block; padding: 1px 6px; border-radius: 999px; font-size: 11px; background: var(--panel-2); color: var(--muted); }
 .pf-badge.warn { background: rgba(231, 182, 90, 0.16); color: var(--accent-2); }
+.command-strip { display: flex; flex-wrap: wrap; gap: 14px; padding: 8px 12px; margin: 0 0 8px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+.command-strip .cs-cell b { color: var(--muted); font-weight: 500; margin-right: 5px; }
+.command-strip .cs-cell.warn { color: var(--accent-2); }

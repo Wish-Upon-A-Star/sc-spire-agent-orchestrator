@@ -53,6 +53,8 @@ SUPERVISOR_AUTO_REVIEW_ENABLED = os.environ.get("SC_SPIRE_SUPERVISOR_AUTO_REVIEW
 SUPERVISOR_AUTO_LIVE_CLAUDE = os.environ.get("SC_SPIRE_SUPERVISOR_AUTO_LIVE_CLAUDE", "0") == "1"
 CLAUDE_REVIEW_TIMEOUT = int(os.environ.get("SC_SPIRE_CLAUDE_REVIEW_TIMEOUT", "900"))
 EVENT_LOCK = threading.Lock()
+STATUS_EPOCH = {"seq": 0}
+STATUS_EPOCH_LOCK = threading.Lock()
 ISSUE_IMPORT_CACHE: dict[str, object] = {"mtime": None, "payload": None}
 RESPONSE_CACHE: dict[str, dict[str, object]] = {}
 RESPONSE_CACHE_LOCKS: dict[str, threading.Lock] = {
@@ -123,6 +125,8 @@ def acquire_instance_lock(port: int) -> None:
 def invalidate_status_cache() -> None:
     RESPONSE_CACHE.pop("runs", None)
     RESPONSE_CACHE.pop("status", None)
+    with STATUS_EPOCH_LOCK:
+        STATUS_EPOCH["seq"] += 1
 
 
 def list_runs(limit: int = 80) -> list[dict[str, object]]:
@@ -383,7 +387,10 @@ def read_openai_api_key() -> str:
     if env_key:
         return env_key
     if DESKTOP_OPENAI_KEY.exists():
-        return DESKTOP_OPENAI_KEY.read_text(encoding="utf-8", errors="ignore").strip()
+        try:
+            return DESKTOP_OPENAI_KEY.read_text(encoding="utf-8", errors="ignore").strip()
+        except OSError:
+            return ""
     return ""
 
 
@@ -1060,8 +1067,50 @@ def prompt_preflight_model() -> str:
     return "gpt-5.5"
 
 
+SUGGEST_KEYWORD_MAP = {
+    "테란": ["data/records/cards_terran.json"],
+    "저그": ["data/records/cards_zerg.json"],
+    "프로토스": ["data/records/cards_protoss.json"],
+    "이벤트": ["data/records/events_*.json"],
+    "보스": ["data/records/events_*.json"],
+    "상점": ["game_mvp.py (shop section)", "app.py"],
+    "유물": ["game_mvp.py (shop section)"],
+    "한국어": ["data/localized_runtime/materialized/ko/"],
+    "로케일": ["data/localized_runtime/materialized/ko/"],
+    "번역": ["data/localized_runtime/materialized/ko/"],
+}
+
+
+def suggest_targets(text: str) -> list[str]:
+    lowered = text.lower()
+    hits: list[str] = []
+    for keyword, paths in SUGGEST_KEYWORD_MAP.items():
+        if keyword.lower() in lowered:
+            for path in paths:
+                if path not in hits:
+                    hits.append(path)
+    return hits[:5]
+
+
+VAGUE_TOKENS = ["봐줘", "한번", "좀", "어떤지", "확인해", "체크", "이상한", "대충", "살펴"]
+SPECIFIC_SIGNALS = [".json", ".py", "/", "->", "→", "라인", "필드", "에서", "낮춰", "바꿔", "추가", "수정"]
+
+
+def classify_request_weight(text: str) -> str:
+    has_path = any(sig in text for sig in [".json", ".py", "/"])
+    specific = has_path or sum(1 for s in SPECIFIC_SIGNALS if s in text) >= 2
+    if specific and len(text.split()) >= 4:
+        return "full"
+    if any(tok in text for tok in VAGUE_TOKENS) or len(text.split()) < 4:
+        return "light"
+    return "full"
+
+
 def build_rule_based_prompt(text: str, target: str, run_context: dict[str, object]) -> tuple[str, dict[str, object]]:
+    text = text if isinstance(text, str) else ""
     normalized = " ".join(text.split())
+    suggested = suggest_targets(text)
+    weight = classify_request_weight(text)
     missing: list[str] = []
     warnings: list[str] = []
     if len(normalized) < 12:
@@ -1097,6 +1146,7 @@ def build_rule_based_prompt(text: str, target: str, run_context: dict[str, objec
         "- 사용자가 모델명이나 도구명을 다 쓰지 않아도, 작업 품질에 이득이면 메인 오케스트레이터가 알아서 적절한 경로를 배정한다.",
         "- HTML 운영판에서 지금 무엇이 실행 중인지, 메인이 무엇을 판단했는지, 어느 작업자/검토자에게 무엇이 갔는지 바로 확인 가능해야 한다.",
         "",
+        *(["추정 작업 대상 (확인 후 확정):", *(f"- {p}" for p in suggested), ""] if suggested else []),
         "먼저 해야 할 일:",
         "1. AGENTS.md, provider_routing.json, 최근 issue memory, 선택 run transcript를 읽은 것으로 간주하지 말고 실제 작업 입력에 반영하라.",
         "2. 반복 실패나 사용자 교정은 acceptance gate로 승격하라. 이미 알려진 실수를 다른 모델/세션이 다시 반복하지 못하게 막아라.",
@@ -1135,11 +1185,26 @@ def build_rule_based_prompt(text: str, target: str, run_context: dict[str, objec
         "- 아직 완료가 아닌 이유와 다음 행동",
         "이 다섯 가지를 HTML에서 확인 가능하게 남겨라.",
     ]
+    if weight == "light":
+        refined_lines = [
+            "메인 오케스트레이터 — 경량(light) 처리 요청",
+            "",
+            "사용자 원문(모호함, 확인 우선):",
+            text,
+            "",
+            "지시:",
+            "1. 풀 PRD/worker-dispatch/review-gate를 아직 만들지 마라.",
+            "2. 먼저 1~3개의 한국어 clarifying 질문으로 범위(file/where/how)를 좁혀라.",
+            *(["3. 추정 작업 대상 (확인용):", *(f"   - {p}" for p in suggested)] if suggested else ["3. 관련 파일 후보를 grep로 제시하라."]),
+            "4. 사용자가 확정하면 그때 full 오케스트레이션으로 승격하라.",
+        ]
     refined_prompt = "\n".join(refined_lines)
     return refined_prompt, {
         "status": "refined_for_main_orchestrator",
-        "mode": "detailed_orchestrator_prompt_from_plaintext",
+        "mode": "detailed_orchestrator_prompt_from_plaintext" if weight == "full" else "light_clarify_first",
         "style": "rough_input_detailed_output",
+        "request_weight": weight,
+        "suggested_targets": suggested,
         "original_length": len(text),
         "refined_length": len(refined_prompt),
         "missing_fields": missing,
@@ -5812,6 +5877,33 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 debug_log(f"GET /api/status payload_done bytes={len(json.dumps(payload, ensure_ascii=False).encode('utf-8'))} elapsed={time.time() - started:.3f}")
                 self._send_json(payload)
                 debug_log(f"GET /api/status sent elapsed={time.time() - started:.3f}")
+                return
+            if parsed.path == "/api/events":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "keep-alive")
+                self.end_headers()
+                last = -1
+                idle = 0
+                try:
+                    while True:
+                        with STATUS_EPOCH_LOCK:
+                            seq = STATUS_EPOCH["seq"]
+                        if seq != last:
+                            last = seq
+                            idle = 0
+                            self.wfile.write(f"event: status\ndata: {seq}\n\n".encode("utf-8"))
+                            self.wfile.flush()
+                        else:
+                            idle += 1
+                            if idle >= 30:
+                                idle = 0
+                                self.wfile.write(b": keep-alive\n\n")
+                                self.wfile.flush()
+                        time.sleep(1)
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                    pass
                 return
             if parsed.path == "/api/work-items":
                 work_items = build_work_items(limit=120)

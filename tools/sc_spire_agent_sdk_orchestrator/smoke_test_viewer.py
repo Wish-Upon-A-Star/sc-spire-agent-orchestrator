@@ -153,11 +153,12 @@ def main() -> int:
             "호출 가능",
             "Adapter",
             "renderPreflightBanner",
+            "renderCommandStrip",
         ],
     )
 
     styles = fetch_text("/styles.css")
-    assert_contains("styles", styles, ["ops-console", "ops-metric", "ops-checks", "ops-validator-lanes", "ops-advisory", "ops-advisor-grid", "ops-deliberation", "report-pack-summary", "report-pack-verdict", "report-evidence-audit", "goal-completion-audit", "unity-rendered-evidence", "preflight-banner"])
+    assert_contains("styles", styles, ["ops-console", "ops-metric", "ops-checks", "ops-validator-lanes", "ops-advisory", "ops-advisor-grid", "ops-deliberation", "report-pack-summary", "report-pack-verdict", "report-evidence-audit", "goal-completion-audit", "unity-rendered-evidence", "preflight-banner", "command-strip"])
 
     status = fetch_json("/api/status")
     for key in ["runs", "messages", "agents", "execution_lifecycle", "queue_processor", "execution_environment", "adapter_health", "live_preflight"]:
