@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.13 stdlib (`http.server`, `threading`, `json`), 바닐라 JS (ES2020), pytest(`.venv\Scripts\python.exe -m pytest`), stdlib 스모크 스크립트.
 
-**실측 근거 (이 계획의 출처):** 브라우저로 평문 "테란 카드 밸런스가 좀 이상한 거 같으니까 한번 봐줘"를 제출한 결과 — (1) `model: None`, `mode: detailed_orchestrator_prompt_from_plaintext`로 **라이브 LLM 정제가 아닌 결정론적 템플릿**이 적용됨([viewer_server.py:1237-1249](../../tools/sc_spire_agent_sdk_orchestrator/viewer_server.py)), (2) `LIVE_PROMPT_PREFLIGHT_ENABLED` 기본 0이라 키 파일이 있어도 브라우저 경로는 항상 강등, (3) 강등 사유가 화면에 안 뜨고 `검증: 통과`로 보임, (4) 한 문장이 37파일 런 생성, (5) 제출 후 textarea 미초기화 + 새 런 미선택.
+**실측 근거 (이 계획의 출처):** 브라우저로 평문 "테란 카드 밸런스가 좀 이상한 거 같으니까 한번 봐줘"를 제출한 결과 — (1) `model: None`, `mode: detailed_orchestrator_prompt_from_plaintext`로 **라이브 LLM 정제가 아닌 결정론적 템플릿**이 적용됨([viewer_server.py:1237-1249](../../../tools/sc_spire_agent_sdk_orchestrator/viewer_server.py)), (2) `LIVE_PROMPT_PREFLIGHT_ENABLED` 기본 0이라 키 파일이 있어도 브라우저 경로는 항상 강등, (3) 강등 사유가 화면에 안 뜨고 `검증: 통과`로 보임, (4) 한 문장이 37파일 런 생성, (5) 제출 후 textarea 미초기화 + 새 런 미선택.
 
 ---
 

@@ -41,7 +41,7 @@ Layer 0  SUBSTRATE    무엇을 믿나     GET read-only · provenance · callab
 ## 2. Layer 0 — Substrate (Trust)
 
 ### A1. GET read-only 원칙 (검증된 실제 버그 · 최우선)
-- **증거:** [viewer_server.py:231](../../tools/sc_spire_agent_sdk_orchestrator/viewer_server.py) `run_payload()` → L239-241 `ensure_report_pack_judgment / ensure_report_evidence_audit / ensure_goal_completion_audit` → 내부 `(run_dir/artifact).write_text(...)`. 즉 **GET `/api/run`으로 "보기만 해도" 디스크에 artifact가 써짐.**
+- **증거:** [viewer_server.py:231](../../../tools/sc_spire_agent_sdk_orchestrator/viewer_server.py) `run_payload()` → L239-241 `ensure_report_pack_judgment / ensure_report_evidence_audit / ensure_goal_completion_audit` → 내부 `(run_dir/artifact).write_text(...)`. 즉 **GET `/api/run`으로 "보기만 해도" 디스크에 artifact가 써짐.**
 - **문제:** "내가 클릭해서 생긴 건지, worker가 만든 건지, closure 루프가 만든 건지"가 흐려짐. 캐시 무효화 + 동시성 위험도 동반.
 - **수정:** GET은 순수 조회만. 자동 보정/재계산은 명시적 POST `/api/run/reconcile`(또는 `/migrate`, `/audit`)로 분리. UI엔 "derived artifact outdated"만 표시.
 - **회귀 테스트:** `test_get_run_is_read_only` (A7).
@@ -284,3 +284,42 @@ output/agent_orchestrator_runs/budget-ledger.jsonl   (A10)
 - L5 `waiting_for_operator`에서 타임아웃/리마인더 정책은?
 - A2 provenance를 **소급 적용**(기존 artifact)할 것인가, 신규부터인가?
 - 5렌즈(E3)가 light에서 1 validator로 합쳐질 때 품질 저하 임계는?
+
+---
+
+## 10. 외부 교차검증 반영 (GPT-5.4 2차 + Gemini)
+
+### 확인된 사실 (GPT 2차 정적검토)
+- push 실재 / `main` 최신 = `d6ac91b`(이 설계문서) / 직전 `6dd8f4c`(M1~M6) / verification-log·8개 unit test·확장 smoke 실재.
+- **단, "검증 완료"는 로컬 로그 기준이고 GitHub CI는 없음** → 신규 항목 **A13** 추가.
+- M1~M6 코드 반영 전부 확인됨. **A1·A5는 "문서가 잡았다"일 뿐 아직 코드 미수정**(상태표대로 다음 1순위). A1은 `/api/run`→`run_payload`→`ensure_*` write_text 실재.
+
+### 즉시 반영 (이 커밋)
+- **P0-1 링크 버그 수정:** `docs/superpowers/plans/`에서 root까지 `../../` → `../../../`. 2곳 교정(이 문서 A1 증거 링크 + viewer-improvements 실측근거 링크).
+
+### backlog 갱신
+- **A9 Unity adapter: 조건부 → 활성 승격.** Unity repo(`sc-spire-unity`) 링크가 실제로 들어왔으므로. 동반: **M3/A-신설** suggestion map을 Unity surface classifier로 확장 — `Assets/Scripts/SCSpire/Runtime`, `Assets/Scripts/SCSpire/UI`, `Assets/UI`, `Assets/Scenes`, `Assets/Editor`. (현재 SUGGEST_KEYWORD_MAP은 Flask/records 경로 중심.)
+- **A13 (신규): repo에 검증 고정.** GitHub Actions(또는 최소 `make verify` = pytest+smoke) 추가해 커밋마다 자동 검증. 지금은 로컬 로그뿐.
+
+### Gemini 제안 — 채택/보류 (규모 기준 판단)
+| 제안 | 판정 | 근거 |
+|---|---|---|
+| **Pydantic로 핸드오프 페이로드 검증** | ✅ 채택(contract 층 한정) | A2 provenance·E4 output·L1 lane 계약의 구현 수단으로 적합. 핸드오프 환각/파싱에러 차단. **단 도구의 zero-dep 강점과 trade-off** → 신규 `prompt_contracts/` 계약에만 도입, 기존 stdlib 경로는 유지. (대안: stdlib `jsonschema`) |
+| **모델 티어 동적 라우팅** | ✅ 채택 | E5(mode budget)+provider_routing에 흡수 — 복잡도별 reviewer 모델 강제 |
+| **asyncio 동시성** | 🟡 부분 | 진짜 병목은 B3(동기 POST)와 다중 lane 직렬. **lane 호출 병렬화(E3 review-matrix)만** 도입, 서버 전면 async 재작성은 단일사용자 로컬엔 과함 |
+| **Rust/PyO3 핫패스** | ❌ 보류 | 단일사용자 로컬, issue-memory는 파일 몇 개 규모. 규모 근거 없는 조기최적화. 빌드/유지비 >> 이득 |
+| **Vector DB(Chroma/FAISS) issue-memory** | 🟡 보류(A12와 병합 가능) | 의미검색은 매력적이나 dep+임베딩비용. 현 이슈 수엔 keyword+`issue_match_score`로 충분. 규모 커지면 "semantic으로 후보 찾고 → A12 binary check로 검증" 보완재로 |
+| **FastAPI 엔진/UI 분리** | 🟡 보류 | 방향 동의하나 동작하는 stdlib 서버 전면 refactor는 리스크. 근시일은 E1~E5 계약층으로 논리적 분리가 더 가성비 |
+
+> 원칙: 이 도구는 **단일 운영자·로컬·zero-dep**가 강점. 일반 베스트프랙티스(Rust/벡터DB/풀async/FastAPI)는 규모 근거가 생길 때 승격하고, 지금은 신뢰축(A)·계약층(E)·레인(L)에 집중.
+
+### 갱신된 P0/P1 (GPT 권고 + 내 판단 병합)
+```
+P0-1 링크 수정                         ✅ 이 커밋에서 완료
+P0-2 A1 GET read-only 실제 코드 수정
+P0-3 A5 created_run_id 반환
+P1-1 A9 Unity adapter/inventory 활성 트랙
+P1-2 M3 suggestion map Unity surface 확장
+P1-3 A13 CI/검증 명령 repo 고정
+P1-4 E4/A2 계약을 Pydantic(or jsonschema)로 강제
+```
